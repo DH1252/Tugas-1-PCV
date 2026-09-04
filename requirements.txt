@@ -1,0 +1,4 @@
+opencv-python==4.13.0.92
+numpy==2.5.4
+pygame-ce==2.5.8   # not together with classic pygame
+pymunk==7.3.1
