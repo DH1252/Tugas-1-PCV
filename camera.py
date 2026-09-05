@@ -43,3 +43,34 @@ def list_cameras(backend="auto", size=(640, 480)):
     return found
 
 
+class Camera:
+    """Keeps the newest frame; only the grab thread touches the camera (MSMF can deadlock)."""
+
+    def __init__(self, index=0, backend="auto", size=(640, 480)):
+        self.cap = open_camera(index, backend, size)
+        if self.cap is None:
+            raise RuntimeError(f"Can't open camera {index}. Close other apps that use it, check the "
+                               "Windows camera privacy settings, or try --list.")
+        self.latest = None
+        self.lock = threading.Lock()
+        self.running = True
+        threading.Thread(target=self._grab, daemon=True).start()
+
+    def _grab(self):
+        while self.running:
+            ok, frame = self.cap.read()            # blocks until the next frame
+            if not ok:
+                time.sleep(0.01)
+                continue
+            with self.lock:
+                self.latest = (frame, time.perf_counter())   # frame, capture time
+        self.cap.release()
+
+    def read(self):
+        """Newest (frame, capture time), or None if nothing new."""
+        with self.lock:
+            latest, self.latest = self.latest, None
+        return latest
+
+    def close(self):
+        self.running = False
