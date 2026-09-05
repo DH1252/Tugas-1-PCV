@@ -28,3 +28,18 @@ def open_camera(index, backend="auto", size=(640, 480)):
     return None
 
 
+def list_cameras(backend="auto", size=(640, 480)):
+    """[(index, width, height)] of cameras 0-4 that deliver a frame."""
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+    found = []
+    for i in range(5):
+        cap = open_camera(i, backend, size)
+        if cap is None:
+            continue
+        ok, frame = cap.read()
+        if ok:
+            found.append((i, frame.shape[1], frame.shape[0]))
+        cap.release()
+    return found
+
+
