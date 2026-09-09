@@ -31,3 +31,41 @@ AREA_X, AREA_Y, AREA_W, AREA_H = 32.0, 48.0, 256.0, 144.0
 Saber = namedtuple("Saber", "status pos vel t")
 
 
+def set_margin(margin):
+    """margin: fraction of the 16:9 crop left out on each side (0.1 = 10%)."""
+    global AREA_X, AREA_Y, AREA_W, AREA_H
+    crop_h = W * 9 / 16                          # 180
+    AREA_X = margin * W
+    AREA_Y = (H - crop_h) / 2 + margin * crop_h
+    AREA_W = W * (1 - 2 * margin)
+    AREA_H = crop_h * (1 - 2 * margin)
+
+
+def enable_opencl():
+    """Run steps 3-5 on the GPU via cv2.UMat; returns the GPU name, or None."""
+    global USE_OPENCL
+    USE_OPENCL = cv2.ocl.haveOpenCL()
+    if not USE_OPENCL:
+        return None
+    cv2.ocl.setUseOpenCL(True)
+    return cv2.ocl.Device.getDefault().name()
+
+
+def prepare(frame):
+    """Step 1: returns (mirrored frame for display, small blurred frame for tracking)."""
+    fh, fw = frame.shape[:2]
+    if fw * 3 != fh * 4:                         # e.g. 1280x720: crop the sides to 4:3
+        cw, ch = min(fw, fh * 4 // 3), min(fh, fw * 3 // 4)
+        frame = frame[(fh - ch) // 2:(fh + ch) // 2, (fw - cw) // 2:(fw + cw) // 2]
+    mirrored = cv2.flip(frame, 1)                # horizontal flip, like a mirror
+    small = cv2.resize(mirrored, (W, H), interpolation=cv2.INTER_AREA)
+    return mirrored, cv2.GaussianBlur(small, (5, 5), 0)
+
+
+def to_screen(x, y):
+    """Processing px -> screen position 0..1, clamped to the play area."""
+    u = (x - AREA_X) / AREA_W
+    v = (y - AREA_Y) / AREA_H
+    return min(max(u, 0.0), 1.0), min(max(v, 0.0), 1.0)
+
+
