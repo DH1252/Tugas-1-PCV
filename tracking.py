@@ -69,3 +69,29 @@ def to_screen(x, y):
     return min(max(u, 0.0), 1.0), min(max(v, 0.0), 1.0)
 
 
+# ---------- step 2: light correction ----------
+
+class LightCorrection:
+    """Per-channel gains = median(background / current) over the top and side wall strips."""
+
+    def __init__(self, background):
+        walls = np.zeros((H, W), bool)
+        walls[:36, :] = True                     # top strip
+        walls[:, :32] = True                     # left strip
+        walls[:, -32:] = True                    # right strip
+        self.idx = np.flatnonzero(walls)[::8]    # every 8th wall pixel
+        self.reference = background.reshape(-1, 3)[self.idx].astype(np.float32)
+        self.gains = np.ones(3, np.float32)
+
+    def __call__(self, small):
+        current = small.reshape(-1, 3)[self.idx].astype(np.float32)
+        # Black and blown-out pixels don't scale with the light.
+        usable = ((current.min(axis=1) > 8) & (current.max(axis=1) < 250)
+                  & (self.reference.min(axis=1) > 8) & (self.reference.max(axis=1) < 250))
+        if usable.sum() > 50:
+            gains = np.median(self.reference[usable] / current[usable], axis=0)
+            gains = np.clip(gains, 0.25, 4.0)
+            self.gains += 0.3 * (gains - self.gains)     # smoothing
+        return np.clip(small * self.gains, 0, 255).astype(np.uint8)
+
+
