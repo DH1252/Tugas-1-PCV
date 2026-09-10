@@ -69,6 +69,17 @@ def to_screen(x, y):
     return min(max(u, 0.0), 1.0), min(max(v, 0.0), 1.0)
 
 
+def hue_offset(h, center):
+    """Signed hue difference across the wrap: hue_offset(2, 178) == 4."""
+    return (np.asarray(h, np.float32) - center + 90) % 180 - 90
+
+
+def clean(mask):
+    """Step 5: opening (erode, dilate) removes specks; closing (dilate, erode) fills holes."""
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, KERNEL)
+    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, KERNEL)
+
+
 # ---------- step 2: light correction ----------
 
 class LightCorrection:
@@ -93,5 +104,43 @@ class LightCorrection:
             gains = np.clip(gains, 0.25, 4.0)
             self.gains += 0.3 * (gains - self.gains)     # smoothing
         return np.clip(small * self.gains, 0, 255).astype(np.uint8)
+
+
+# ---------- step 3: color model ----------
+
+HUE_NAMES = [(8, "red"), (20, "orange"), (33, "yellow"), (80, "green"), (95, "cyan"),
+             (130, "blue"), (150, "purple"), (170, "pink"), (180, "red")]
+
+
+class ColorModel:
+    """A marker's color as an HSV box: hue range plus minimum saturation and brightness."""
+
+    def __init__(self, hsv_pixels):
+        h = hsv_pixels[:, 0].astype(np.float32)
+        s, v = hsv_pixels[:, 1], hsv_pixels[:, 2]
+        # Circular mean: a plain mean of 2 and 178 (both red) gives 90 (cyan).
+        angle = h * (np.pi / 90)
+        self.hue = math.degrees(math.atan2(np.sin(angle).mean(), np.cos(angle).mean())) / 2 % 180
+        # 2nd-98th percentile of the samples, plus 4 on each side.
+        lo, hi = np.percentile(hue_offset(h, self.hue), [2, 98])
+        self.h_lo = math.floor(self.hue + lo - 4)
+        self.h_hi = math.ceil(self.hue + hi + 4)
+        # Loose floors: motion blur washes the color out.
+        self.s_min = int(np.clip(np.percentile(s, 5) - 40, 60, 140))
+        self.v_min = int(np.clip(np.percentile(v, 5) - 50, 40, 120))
+        self.name = next(name for limit, name in HUE_NAMES if self.hue < limit)
+        rgb = cv2.cvtColor(np.uint8([[[round(self.hue) % 180, 220, 255]]]), cv2.COLOR_HSV2RGB)[0, 0]
+        self.rgb = tuple(int(c) for c in rgb)    # display color
+
+    def mask(self, hsv):
+        """255 inside the box; a range crossing 0/179 (red) needs two inRange calls."""
+        lo, hi, s, v = self.h_lo, self.h_hi, self.s_min, self.v_min
+        if lo < 0:
+            return cv2.bitwise_or(cv2.inRange(hsv, (0, s, v), (hi, 255, 255)),
+                                  cv2.inRange(hsv, (lo + 180, s, v), (179, 255, 255)))
+        if hi > 179:
+            return cv2.bitwise_or(cv2.inRange(hsv, (lo, s, v), (179, 255, 255)),
+                                  cv2.inRange(hsv, (0, s, v), (hi - 180, 255, 255)))
+        return cv2.inRange(hsv, (lo, s, v), (hi, 255, 255))
 
 
