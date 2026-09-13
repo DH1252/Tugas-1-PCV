@@ -144,3 +144,118 @@ class ColorModel:
         return cv2.inRange(hsv, (lo, s, v), (hi, 255, 255))
 
 
+# ---------- calibration ----------
+
+def marker_pixels(box, background):
+    """HSV pixels in the square that are new, not skin, bright and saturated; None if too few."""
+    hsv = cv2.cvtColor(box, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    new = np.abs(box.astype(np.int16) - background.astype(np.int16)).max(axis=2) > 30
+    skin = ((h <= 25) | (h >= 170)) & (s < 150)
+    candidates = new & ~skin & (v >= 50) & (s >= 60)
+    if candidates.sum() < 25:
+        return None
+    # Marker hue = most common hue among the most saturated candidates.
+    strong = candidates & (s >= max(70, np.percentile(s[candidates], 97) - 50))
+    counts = np.bincount(h[strong], minlength=180)
+    peak = int(np.argmax(counts))
+    marker = candidates & (np.abs(hue_offset(h, peak)) <= 15)
+    if marker.sum() < 25:
+        return None
+    return hsv[marker]
+
+
+class Calibrator:
+    """Background (median of 30 frames), then each marker at 3 spots (15 good frames each),
+    then a ColorModel and exclusion mask per marker."""
+
+    SPOTS = [(0.5, 0.5), (0.25, 0.4), (0.75, 0.72)]     # square centers, screen coords
+    BOX = 36                                            # square size, processing px
+
+    def __init__(self, markers=("A", "B")):
+        self.markers = list(markers)
+        self.labels = {"A": "marker 1 (green)", "B": "marker 2 (blue)"}
+        if len(self.markers) == 1:
+            self.labels = {self.markers[0]: "your marker"}
+        self.t0 = None
+        self.frames = []                   # background frames
+        self.background = None
+        self.light = None
+        self.marker_i = 0                  # current marker
+        self.spot_i = 0                    # current spot
+        self.spot_t = 0.0                  # when the square moved there
+        self.hits = 0                      # frames with the marker found at this spot
+        self.pixels = []                   # samples for the current marker
+        self.found = False
+        self.models, self.keep = {}, {}
+        self.done = False
+        self.message = ""
+
+    @property
+    def marker(self):
+        return None if self.done else self.markers[self.marker_i]
+
+    @property
+    def box(self):
+        """The square as (x, y, w, h) in processing px, or None."""
+        if self.background is None or self.done:
+            return None
+        u, v = self.SPOTS[self.spot_i]
+        x = AREA_X + u * AREA_W - self.BOX / 2
+        y = AREA_Y + v * AREA_H - self.BOX / 2
+        return int(x), int(y), self.BOX, self.BOX
+
+    def feed(self, small, t):
+        if self.done:
+            return
+        if self.t0 is None:
+            self.t0 = t
+        if self.background is None:
+            self._background(small, t)
+        else:
+            self._sample(small, t)
+
+    def _background(self, small, t):
+        left = 2.0 - (t - self.t0)
+        if left > 0:
+            self.message = f"Hide your markers and keep still ({math.ceil(left)})"
+            return
+        self.message = "Taking a picture of the background"
+        self.frames.append(small)
+        if len(self.frames) == 30:
+            self.background = np.median(self.frames, axis=0).astype(np.uint8)
+            self.light = LightCorrection(self.background)
+            self.spot_t = t
+
+    def _sample(self, small, t):
+        self.message = f"Hold {self.labels[self.marker]} in the square"
+        x, y, w, h = self.box
+        frame = self.light(small)
+        got = marker_pixels(frame[y:y + h, x:x + w], self.background[y:y + h, x:x + w])
+        self.found = got is not None
+        if t - self.spot_t < 1.5 or got is None:          # 1.5 s to get there
+            return
+        self.pixels.append(got[::max(1, len(got) // 200)])  # ~200 px per frame
+        self.hits += 1
+        if self.hits < 15:
+            return
+        self.hits, self.spot_t = 0, t
+        self.spot_i += 1
+        if self.spot_i < len(self.SPOTS):
+            return
+        self.models[self.marker] = ColorModel(np.concatenate(self.pixels))
+        self.pixels, self.spot_i = [], 0
+        self.marker_i += 1
+        if self.marker_i == len(self.markers):
+            self._finish()
+
+    def _finish(self):
+        hsv = cv2.cvtColor(self.background, cv2.COLOR_BGR2HSV)
+        grow = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        for key, model in self.models.items():
+            taken = cv2.dilate(clean(model.mask(hsv)), grow)
+            self.keep[key] = cv2.bitwise_not(taken)        # 255 = allowed, 0 = excluded
+        self.done = True
+        self.message = "Calibrated"
+
+
