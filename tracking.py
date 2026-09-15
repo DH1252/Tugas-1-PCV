@@ -285,3 +285,72 @@ def find_blobs(mask):
     return blobs
 
 
+class Tracker:
+    """Step 7: Kalman filter on (x, y, vx, vy); searching -> tracking <-> coasting."""
+
+    def __init__(self):
+        self.kf = cv2.KalmanFilter(4, 2)
+        self.kf.measurementMatrix = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], np.float32)
+        self.kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 0.5   # low: trust the camera
+        self.status = "searching"
+        self.seen = []                            # (t, x, y) while searching
+        self.missed = 0
+        self.radius = 0.0
+        self.last_t = None
+        self.pred, self.gate = None, 0.0          # for the debug overlay
+
+    def update(self, blobs, t):
+        dt = 1 / 30 if self.last_t is None else min(max(t - self.last_t, 1 / 240), 0.2)
+        self.last_t = t
+        if self.status == "searching":
+            self._search(blobs, t)
+        else:
+            self._follow(blobs, dt)
+        if self.status == "searching":
+            return Saber("searching", None, (0.0, 0.0), t)
+        x, y, vx, vy = self.kf.statePost.ravel()
+        return Saber(self.status, to_screen(x, y), (vx / AREA_H, vy / AREA_H), t)
+
+    def _search(self, blobs, t):
+        """Lock on once the biggest blob stays within 20 px for 3 frames."""
+        if not blobs:
+            self.seen = []
+            return
+        x, y, area = max(blobs, key=lambda b: b[2])
+        if self.seen and math.dist((x, y), self.seen[-1][1:]) > 20:
+            self.seen = []                                   # jumped: restart the count
+        self.seen.append((t, x, y))
+        if len(self.seen) < 3:
+            return
+        t0, x0, y0 = self.seen[0]
+        span = max(t - t0, 1e-3)
+        self.kf.statePost = np.array([[x], [y], [(x - x0) / span], [(y - y0) / span]], np.float32)
+        self.kf.errorCovPost = np.diag([4.0, 4.0, 9e4, 9e4]).astype(np.float32)
+        self.status, self.missed, self.seen = "tracking", 0, []
+        self.radius = math.sqrt(area / math.pi)
+
+    def _follow(self, blobs, dt):
+        """Predict, take the nearest blob inside the gate and correct; else coast up to 6 frames."""
+        # Constant velocity; process noise = white-noise acceleration of 2000 px/s^2.
+        self.kf.transitionMatrix = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]],
+                                            np.float32)
+        a, b, c = dt ** 4 / 4, dt ** 3 / 2, dt ** 2
+        self.kf.processNoiseCov = np.array([[a, 0, b, 0], [0, a, 0, b], [b, 0, c, 0], [0, b, 0, c]],
+                                           np.float32) * 2000.0 ** 2
+        x, y, vx, vy = self.kf.predict().ravel()
+        # Gate: 3 radii (min 30 px) plus the distance moved per frame while coasting.
+        gate = max(3 * self.radius, 30) + math.hypot(vx, vy) * dt * (self.missed + 1)
+        self.pred, self.gate = (x, y), gate
+        best = min(blobs, key=lambda b: math.dist(b[:2], (x, y)), default=None)
+        if best is not None and math.dist(best[:2], (x, y)) <= gate:
+            self.kf.correct(np.array([[best[0]], [best[1]]], np.float32))
+            self.status, self.missed = "tracking", 0
+            self.radius = math.sqrt(best[2] / math.pi)
+            return
+        self.missed += 1
+        self.status = "coasting"                  # predict() already moved the state
+        if self.missed > 6:
+            self.status, self.seen = "searching", []
+            self.pred = None
+
+
