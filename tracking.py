@@ -259,3 +259,29 @@ class Calibrator:
         self.message = "Calibrated"
 
 
+# ---------- steps 6-7: blobs and tracking ----------
+
+def palm_center(labels, i, x, y, w, h):
+    """Mean of the pixels deepest inside blob i (holes filled): the palm of a glove."""
+    blob = (labels[y:y + h, x:x + w] == i).astype(np.uint8)
+    blob = cv2.copyMakeBorder(blob, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    outside = blob.copy()
+    cv2.floodFill(outside, None, (0, 0), 1)       # fill from the border
+    blob[outside == 0] = 1                        # unreached = hole
+    dist = cv2.distanceTransform(blob, cv2.DIST_L2, 3)   # distance to the edge
+    ys, xs = np.nonzero(dist >= 0.8 * dist.max())
+    return x - 1 + xs.mean(), y - 1 + ys.mean()   # -1 undoes the border
+
+
+def find_blobs(mask):
+    """Step 6: [(x, y, area)] of blobs between MIN_AREA and MAX_AREA."""
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    blobs = []
+    for i in range(1, n):                         # label 0 is the background
+        x, y, w, h, area = stats[i]
+        if MIN_AREA <= area <= MAX_AREA:
+            cx, cy = palm_center(labels, i, x, y, w, h)
+            blobs.append((cx, cy, area))
+    return blobs
+
+
