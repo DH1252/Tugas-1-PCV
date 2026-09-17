@@ -354,3 +354,30 @@ class Tracker:
             self.pred = None
 
 
+class Vision:
+    """Camera frame -> one Saber per marker, using a finished Calibrator."""
+
+    def __init__(self, cal):
+        self.models = cal.models
+        self.keep = cal.keep
+        self.light = LightCorrection(cal.background)
+        self.trackers = {key: Tracker() for key in self.models}
+        self.small, self.masks, self.blobs = None, {}, {}    # last frame, for the debug overlay
+
+    def __call__(self, frame, t):
+        mirrored, small = prepare(frame)                               # 1
+        small = self.light(small)                                      # 2
+        image = cv2.UMat(small) if USE_OPENCL else small               # upload to the GPU
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)                   # 3
+        sabers = {}
+        for key, model in self.models.items():
+            mask = model.mask(hsv)                                     # 3
+            mask = cv2.bitwise_and(mask, self.keep[key])               # 4
+            mask = clean(mask)                                         # 5
+            if USE_OPENCL:
+                mask = mask.get()                                      # download
+            blobs = find_blobs(mask)                                   # 6
+            sabers[key] = self.trackers[key].update(blobs, t)          # 7
+            self.masks[key], self.blobs[key] = mask, blobs
+        self.small = small
+        return mirrored, sabers
