@@ -34,3 +34,73 @@ class Orb:
         return np.array([x, y])
 
 
+class Game:
+    """One round: a saber cuts only its own color; bombs and missed orbs cost a life."""
+
+    def __init__(self, w, h, sabers, seed=None):
+        self.w, self.h = w, h
+        self.sabers = list(sabers)
+        self.rng = random.Random(seed)
+        self.space = pymunk.Space()
+        self.space.gravity = (0, GRAVITY * h)
+        self.orbs = []
+        self.score, self.lives = 0, LIVES
+        self.time = 0.0                 # game time (s)
+        self.next_launch = 1.0
+        self.last = {}                  # saber -> (game time, position) of its previous sample
+        self.events = []                # (kind, x, y) for popups
+        self.practice = False           # no lives lost
+
+    @property
+    def over(self):
+        return self.lives <= 0
+
+    def advance(self, dt):
+        """Run physics for dt seconds in fixed steps."""
+        end = self.time + min(dt, 0.1)  # skip ahead after a long hiccup
+        while self.time + STEP <= end:
+            self.time += STEP
+            self.space.step(STEP)
+            for orb in self.orbs:
+                orb.history.append((self.time, *orb.body.position))
+            if self.time >= self.next_launch:
+                self.launch()
+        for orb in list(self.orbs):    # fell out the bottom
+            if orb.body.position.y > self.h + orb.shape.radius and orb.body.velocity.y > 0:
+                self.remove(orb)
+                if orb.kind != "bomb":
+                    self.lose_life()
+                    self.events.append(("miss", orb.body.position.x, self.h - 60))
+
+    def launch(self, kind=None):
+        """Throw an orb up from below; launches speed up over time, bombs start after 20 s."""
+        t = self.time
+        self.next_launch = t + max(1.2 - 0.007 * t, 0.6)
+        if kind is None:
+            bomb = t > 20 and self.rng.random() < 0.15
+            kind = "bomb" if bomb else self.rng.choice(self.sabers)
+        r = ORB_R * self.h
+        g = GRAVITY * self.h
+        x = self.rng.uniform(0.15, 0.85) * self.w
+        rise = (self.rng.uniform(0.45, 0.75) + ORB_R) * self.h   # height (px)
+        flight = 2 * math.sqrt(2 * rise / g)                      # time up and down (s)
+        body = pymunk.Body(1, pymunk.moment_for_circle(1, 0, r))
+        body.position = (x, self.h + r)
+        # v = sqrt(2 g h) upward, drifting toward the middle.
+        body.velocity = ((self.w / 2 - x) / flight * self.rng.uniform(0.2, 0.6), -math.sqrt(2 * g * rise))
+        shape = pymunk.Circle(body, r)
+        shape.filter = pymunk.ShapeFilter(group=1)    # same group: no orb-orb collisions
+        self.space.add(body, shape)
+        orb = Orb(kind, body, shape)
+        orb.history.append((t, *body.position))
+        self.orbs.append(orb)
+        return orb
+
+    def lose_life(self):
+        if not self.practice:
+            self.lives -= 1
+
+    def remove(self, orb):
+        self.space.remove(orb.body, orb.shape)
+        self.orbs.remove(orb)
+
