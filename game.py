@@ -104,3 +104,33 @@ class Game:
         self.space.remove(orb.body, orb.shape)
         self.orbs.remove(orb)
 
+    def swing(self, key, saber, t):
+        """Test the saber's path since its last sample against each orb at capture time t."""
+        if saber.status == "searching":
+            self.last.pop(key, None)
+            return
+        p1 = np.array([saber.pos[0] * self.w, saber.pos[1] * self.h])
+        prev = self.last.get(key)
+        self.last[key] = (t, p1)
+        if prev is None or t - prev[0] > 0.2 or math.hypot(*saber.vel) < V_MIN:
+            return
+        t0, p0 = prev
+        for orb in list(self.orbs):
+            # Saber path relative to the orb at t0 and t.
+            hit, _ = segment_hits_circle(p0 - orb.pos_at(t0), p1 - orb.pos_at(t),
+                                         orb.shape.radius + HIT_TOL * self.h)
+            if hit:
+                self.hit(orb, key)
+
+    def hit(self, orb, key):
+        x, y = orb.body.position
+        if orb.kind == "bomb":
+            self.remove(orb)
+            self.lose_life()
+            self.events.append(("bomb", x, y))
+        elif orb.kind == key:
+            self.remove(orb)
+            self.score += 10
+            self.events.append(("slice", x, y))
+        else:
+            self.events.append(("wrong", x, y))   # wrong color: the orb stays
