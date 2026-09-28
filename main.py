@@ -1,0 +1,274 @@
+"""Chroma Slash demo: slice orbs of your marker's color, avoid bombs. Options: python main.py -h.
+
+Keys: Space start, C recalibrate, Esc quit, D debug overlay, V view (camera/mask/corrected),
+P practice mode, S save snapshot to debug/. Holding a saber in START also starts.
+"""
+import os
+
+# Set before cv2 is imported, or Media Foundation can take tens of seconds to open a webcam.
+os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
+import argparse
+import math
+import sys
+import time
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pygame
+
+import tracking
+from camera import Camera, list_cameras
+from game import V_MIN, Game
+
+W, H = 1280, 720                                  # window size
+WHITE, GRAY, YELLOW, RED, GREEN = (240, 240, 240), (160, 160, 160), (250, 210, 60), (235, 70, 60), (80, 220, 110)
+START, START_R, DWELL = (W // 2, H // 2 + 80), 80, 1.5   # hold 1.5 s in the circle to start
+VIEWS = ["camera", "mask", "corrected"]          # background views (V cycles)
+
+
+def to_px(u, v):
+    """Screen position 0..1 -> window px."""
+    return int(u * W), int(v * H)
+
+
+def proc_to_px(x, y):
+    """Processing px -> window px (unclamped)."""
+    return int((x - tracking.AREA_X) / tracking.AREA_W * W), int((y - tracking.AREA_Y) / tracking.AREA_H * H)
+
+
+def camera_picture(frame, dim):
+    """Play-area crop of the frame, scaled to the window and darkened by dim."""
+    s = frame.shape[1] / tracking.W               # frame px per processing px
+    x, y = round(tracking.AREA_X * s), round(tracking.AREA_Y * s)
+    w, h = round(tracking.AREA_W * s), round(tracking.AREA_H * s)
+    img = cv2.resize(frame[y:y + h, x:x + w], (W, H))
+    img = cv2.convertScaleAbs(img, alpha=dim)
+    return pygame.image.frombuffer(cv2.cvtColor(img, cv2.COLOR_BGR2RGB).tobytes(), (W, H), "RGB")
+
+
+class Demo:
+    """The window. States: calibrate -> ready -> play -> over (-> play)."""
+
+    def __init__(self, camera, markers, debug=False, practice=False):
+        self.screen = pygame.display.set_mode((W, H))
+        pygame.display.set_caption("Chroma Slash demo")
+        self.fonts = {}
+        self.camera = camera
+        self.markers = markers
+        self.picture = None
+        self.debug, self.practice, self.view = debug, practice, 0
+        self.fps, self.vision_ms = 0.0, 0.0
+        self.calibrate()
+
+    def calibrate(self):
+        self.cal = tracking.Calibrator(self.markers)
+        self.vision = None
+        self.game = None
+        self.state = "calibrate"
+        self.sabers = {}                          # key -> latest Saber
+        self.trails = {}                          # key -> recent window positions
+        self.popups = []
+        self.dwell = 0.0
+
+    def start(self):
+        self.game = Game(W, H, list(self.vision.models))
+        self.game.practice = self.practice
+        self.popups = []
+        self.dwell = 0.0
+        self.state = "play"
+
+    def run(self):
+        clock = pygame.time.Clock()
+        while True:
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT or (e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE):
+                    return
+                if e.type == pygame.KEYDOWN:
+                    self.key(e.key)
+            dt = clock.tick(60) / 1000                # cap at 60 fps
+            self.fps = clock.get_fps()
+            now = time.perf_counter()
+            self.tick(now, dt)
+            self.draw()
+            pygame.display.flip()
+
+    def key(self, key):
+        if key == pygame.K_c:
+            self.calibrate()
+        elif key == pygame.K_SPACE and self.state in ("ready", "over"):
+            self.start()
+        elif key == pygame.K_d:
+            self.debug = not self.debug
+        elif key == pygame.K_v:
+            self.view = (self.view + 1) % len(VIEWS)
+        elif key == pygame.K_p:
+            self.practice = not self.practice
+            if self.game is not None:
+                self.game.practice = self.practice
+        elif key == pygame.K_s:
+            self.save_snapshot()
+
+    def tick(self, now, dt):
+        if self.state == "play":
+            self.game.advance(dt)
+            for kind, x, y in self.game.events:
+                self.popups.append((kind, x, y, now))
+            self.game.events.clear()
+            if self.game.over:
+                self.state = "over"
+        got = self.camera.read()
+        if got is not None:
+            frame, t = got
+            self.on_frame(frame, t, now)
+        if self.state in ("ready", "over"):
+            near = any(s.status != "searching" and math.dist(to_px(*s.pos), START) < START_R
+                       for s in self.sabers.values())
+            self.dwell = self.dwell + dt if near else 0.0
+            if self.dwell > DWELL:
+                self.start()
+
+    def on_frame(self, frame, t, now):
+        """Handle a camera frame captured at time t."""
+        if self.state == "calibrate":
+            mirrored, small = tracking.prepare(frame)
+            self.cal.feed(small, t)
+            if self.cal.done:
+                self.vision = tracking.Vision(self.cal)
+                self.state = "ready"
+            self.picture = camera_picture(mirrored, 0.85)
+            return
+        started = time.perf_counter()
+        mirrored, self.sabers = self.vision(frame, t)
+        self.vision_ms = 1000 * (time.perf_counter() - started)
+        if VIEWS[self.view] == "mask":
+            self.picture = camera_picture(self.mask_image(), 1.0)
+        elif VIEWS[self.view] == "corrected":
+            self.picture = camera_picture(self.vision.small, 0.6)
+        else:
+            self.picture = camera_picture(mirrored, 0.4)
+        for key, saber in self.sabers.items():
+            trail = self.trails.setdefault(key, deque(maxlen=8))
+            if saber.status == "searching":
+                trail.clear()
+            else:
+                trail.append((to_px(*saber.pos), math.hypot(*saber.vel) >= V_MIN))
+        if self.state == "play":
+            capture_time = self.game.time - (now - t)     # game time at capture
+            for key, saber in self.sabers.items():
+                self.game.swing(key, saber, capture_time)
+
+    # ---------- drawing ----------
+
+    def text(self, s, pos, size=40, color=WHITE, left=False):
+        if size not in self.fonts:
+            self.fonts[size] = pygame.font.Font(None, size)
+        img = self.fonts[size].render(s, True, color)
+        shadow = self.fonts[size].render(s, True, (0, 0, 0))
+        rect = img.get_rect(midleft=pos) if left else img.get_rect(center=pos)
+        self.screen.blit(shadow, rect.move(2, 2))
+        self.screen.blit(img, rect)
+
+    def draw(self):
+        if self.picture is None:
+            self.screen.fill((20, 20, 28))
+        else:
+            self.screen.blit(self.picture, (0, 0))
+        if self.state == "calibrate":
+            self.draw_calibration()
+            return
+        if self.game is not None:
+            self.draw_orbs()
+        self.draw_trails()
+        if self.game is not None:
+            self.draw_popups()
+            self.draw_hud()
+        if self.debug:
+            self.draw_debug()
+        if self.state == "ready":
+            self.draw_start("Hold a saber in the circle, or press Space")
+        elif self.state == "over":
+            self.text("GAME OVER", (W // 2, 150), 110)
+            self.text(f"Score {self.game.score}", (W // 2, 240), 64, YELLOW)
+            self.draw_start("Play again: hold a saber in the circle, or press Space")
+
+    def draw_calibration(self):
+        cal = self.cal
+        self.text(cal.message, (W // 2, 60), 52)
+        if cal.box is not None:
+            x, y, w, h = cal.box
+            left, top = to_px((x - tracking.AREA_X) / tracking.AREA_W, (y - tracking.AREA_Y) / tracking.AREA_H)
+            size = (w / tracking.AREA_W * W, h / tracking.AREA_H * H)
+            pygame.draw.rect(self.screen, GREEN if cal.found else WHITE, pygame.Rect((left, top), size), 4)
+            if self.debug:
+                self.text(f"spot {cal.spot_i + 1}/3   frames with the marker {cal.hits}/15", (W // 2, H - 50), 34)
+
+    def draw_start(self, hint):
+        pygame.draw.circle(self.screen, WHITE, START, START_R, 4)
+        if self.dwell > 0:                        # progress ring
+            rect = pygame.Rect(0, 0, 2 * START_R + 20, 2 * START_R + 20)
+            rect.center = START
+            pygame.draw.arc(self.screen, GREEN, rect, math.pi / 2, math.pi / 2 + 2 * math.pi * self.dwell / DWELL, 8)
+        self.text("START", START, 48)
+        self.text(hint, (START[0], START[1] + 130), 36, GRAY)
+
+    def draw_orbs(self):
+        for orb in self.game.orbs:
+            pos = (int(orb.body.position.x), int(orb.body.position.y))
+            r = int(orb.shape.radius)
+            if orb.kind == "bomb":
+                pygame.draw.circle(self.screen, (55, 55, 62), pos, r)
+                pygame.draw.circle(self.screen, RED, pos, r // 2, 4)
+            else:
+                pygame.draw.circle(self.screen, self.vision.models[orb.kind].rgb, pos, r)
+                pygame.draw.circle(self.screen, WHITE, pos, r, 2)
+
+    def draw_trails(self):
+        """Last 8 positions per saber; thick and colored = fast enough to cut."""
+        for key, trail in self.trails.items():
+            if not trail:
+                continue
+            color = self.vision.models[key].rgb
+            points = list(trail)
+            for (p0, _), (p1, fast) in zip(points, points[1:]):
+                pygame.draw.line(self.screen, color if fast else GRAY, p0, p1, 10 if fast else 3)
+            pygame.draw.circle(self.screen, color, points[-1][0], 14, 4)
+
+    def draw_popups(self):
+        labels = {"wrong": ("WRONG COLOR", GRAY), "bomb": ("-1 LIFE", RED), "miss": ("MISS", RED),
+                  "slice": ("+10", YELLOW)}
+        now = time.perf_counter()
+        self.popups = [p for p in self.popups if now - p[3] < 0.9]
+        for kind, x, y, born in self.popups:
+            text, color = labels[kind]
+            self.text(text, (x, y - 60 * (now - born)), 40, color)   # float up
+
+    def draw_hud(self):
+        self.text(str(self.game.score), (90, 50), 64)
+        if self.game.practice:
+            self.text("PRACTICE", (W // 2, 44), 40, YELLOW)
+            return
+        for i in range(3):
+            color = RED if i < self.game.lives else (70, 70, 70)
+            pygame.draw.circle(self.screen, color, (W // 2 - 40 + 40 * i, 44), 14)
+
+
+def main():
+    tracking.set_margin(0.1)
+    pygame.init()
+    camera = Camera(0, "auto", (640, 480))
+    demo = Demo(camera, ["A", "B"])
+    camera.demo = demo
+    try:
+        demo.run()
+    finally:
+        camera.close()
+        pygame.quit()
+
+
+if __name__ == "__main__":
+    main()
