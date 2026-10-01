@@ -162,6 +162,56 @@ class Demo:
             for key, saber in self.sabers.items():
                 self.game.swing(key, saber, capture_time)
 
+    # ---------- debug tools ----------
+
+    def mask_image(self):
+        """Cleaned masks in marker colors on black (BGR)."""
+        img = np.zeros_like(self.vision.small)
+        for key, mask in self.vision.masks.items():
+            img[mask > 0] = self.vision.models[key].rgb[::-1]     # RGB -> BGR
+        return img
+
+    def save_snapshot(self):
+        """Save the window, corrected frame and masks as PNGs in debug/."""
+        folder = Path("debug")
+        folder.mkdir(exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        pygame.image.save(self.screen, str(folder / f"{stamp}-window.png"))
+        if self.vision is not None and self.vision.small is not None:
+            cv2.imwrite(str(folder / f"{stamp}-corrected.png"), self.vision.small)
+            for key, mask in self.vision.masks.items():
+                cv2.imwrite(str(folder / f"{stamp}-mask-{key}.png"), mask)
+        print(f"Saved debug/{stamp}-*.png")
+
+    def draw_debug(self):
+        """Stats, blob centers (+), Kalman prediction and gate (yellow), mask thumbnails."""
+        v = self.vision
+        lines = [f"FPS {self.fps:.0f}   vision {self.vision_ms:.1f} ms   view: {VIEWS[self.view]} (V)"
+                 f"   practice: {'on' if self.practice else 'off'} (P)",
+                 "light gains B G R: " + "  ".join(f"{g:.2f}" for g in v.light.gains)]
+        for key, model in v.models.items():
+            tracker, blobs = v.trackers[key], v.blobs.get(key, [])
+            lines.append(f"{key} {model.name}: H {model.h_lo}..{model.h_hi}  S >= {model.s_min}  "
+                         f"V >= {model.v_min}   {tracker.status}   blobs {len(blobs)}")
+            for x, y, _ in blobs:
+                px, py = proc_to_px(x, y)
+                pygame.draw.line(self.screen, WHITE, (px - 10, py), (px + 10, py), 2)
+                pygame.draw.line(self.screen, WHITE, (px, py - 10), (px, py + 10), 2)
+            if tracker.pred is not None:
+                radius = max(int(tracker.gate * W / tracking.AREA_W), 2)   # x and y scale match
+                pygame.draw.circle(self.screen, YELLOW, proc_to_px(*tracker.pred), radius, 2)
+        for i, line in enumerate(lines):
+            self.text(line, (20, 110 + 30 * i), 30, left=True)
+        # Half-size masks; the rectangle is the play area.
+        for i, (key, mask) in enumerate(v.masks.items()):
+            x0, y0 = 20 + 170 * i, H - 140
+            thumb = cv2.cvtColor(cv2.resize(mask, (160, 120), interpolation=cv2.INTER_NEAREST), cv2.COLOR_GRAY2RGB)
+            self.screen.blit(pygame.image.frombuffer(thumb.tobytes(), (160, 120), "RGB"), (x0, y0))
+            area = pygame.Rect(x0 + tracking.AREA_X / 2, y0 + tracking.AREA_Y / 2,
+                               tracking.AREA_W / 2, tracking.AREA_H / 2)
+            pygame.draw.rect(self.screen, v.models[key].rgb, area, 1)
+            self.text(key, (x0 + 10, y0 + 12), 26, v.models[key].rgb)
+
     # ---------- drawing ----------
 
     def text(self, s, pos, size=40, color=WHITE, left=False):
