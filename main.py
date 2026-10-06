@@ -51,6 +51,48 @@ def camera_picture(frame, dim):
     return pygame.image.frombuffer(cv2.cvtColor(img, cv2.COLOR_BGR2RGB).tobytes(), (W, H), "RGB")
 
 
+class SimCamera:
+    """Fake webcam: a green ball follows the mouse, a blue one mirrors it."""
+
+    def __init__(self):
+        self.demo = None
+        room = np.full((480, 640, 3), (150, 170, 190), np.uint8)
+        room[360:] = (40, 70, 110)
+        self.room = room
+        self.next_t = 0.0
+
+    def read(self):
+        now = time.perf_counter()
+        if now < self.next_t:                     # 30 fps
+            return None
+        self.next_t = now + 1 / 30
+        img = self.room.copy()
+        noise = np.random.default_rng().integers(-4, 5, img.shape)
+        img = np.clip(img + noise, 0, 255).astype(np.uint8)
+        for color, (u, v) in self.balls():
+            # screen position -> px in the un-mirrored 640x480 image
+            x = 639 - 2 * (tracking.AREA_X + u * tracking.AREA_W)
+            y = 2 * (tracking.AREA_Y + v * tracking.AREA_H)
+            cv2.circle(img, (int(x), int(y)), 14, color, -1)
+        return img, now
+
+    def balls(self):
+        if not pygame.mouse.get_focused():
+            return []
+        mx, my = pygame.mouse.get_pos()
+        u, v = mx / W, my / H
+        green, blue = (60, 200, 40), (200, 90, 30)          # BGR
+        cal = self.demo.cal
+        if self.demo.state == "calibrate":       # only the marker being calibrated
+            if cal.background is None:
+                return []
+            return [(green if cal.marker == "A" else blue, (u, v))]
+        return [(green, (u, v)), (blue, (1 - u, v))]
+
+    def close(self):
+        pass
+
+
 class Demo:
     """The window. States: calibrate -> ready -> play -> over (-> play)."""
 
@@ -308,10 +350,42 @@ class Demo:
 
 
 def main():
-    tracking.set_margin(0.1)
+    p = argparse.ArgumentParser(description="Chroma Slash demo: slice orbs with colored markers.")
+    p.add_argument("--camera", type=int, default=0)
+    p.add_argument("--one-hand", action="store_true", help="play with a single marker")
+    p.add_argument("--list", action="store_true", help="show which cameras work")
+    p.add_argument("--backend", choices=["auto", "msmf", "dshow"], default="auto",
+                   help="camera backend (Windows): auto tries Media Foundation, then DirectShow")
+    p.add_argument("--size", default="640x480", metavar="WxH", help="capture resolution, e.g. 1280x720")
+    p.add_argument("--margin", type=float, default=0.1,
+                   help="camera border left out of the play area, 0-0.4 (default 0.1)")
+    p.add_argument("--opencl", action="store_true", help="run the color masks on the GPU (OpenCL)")
+    p.add_argument("--sim", action="store_true", help="no camera: the mouse moves the markers")
+    p.add_argument("--debug", action="store_true", help="start with the debug overlay on (D toggles)")
+    p.add_argument("--practice", action="store_true", help="no lives are lost (P toggles)")
+    args = p.parse_args()
+    width, height = args.size.lower().split("x")
+    size = (int(width), int(height))
+    tracking.set_margin(min(max(args.margin, 0.0), 0.4))
+    if args.opencl:
+        device = tracking.enable_opencl()
+        print(f"OpenCL: {device}" if device else "OpenCL is not available; running on the CPU.")
+    if args.list:
+        found = list_cameras(args.backend, size)
+        for index, w, h in found:
+            print(f"--camera {index}: {w}x{h}")
+        if not found:
+            print("No camera could be opened. Close other apps that use it and check the privacy settings.")
+        return
+    if args.sim:
+        camera = SimCamera()
+    else:
+        try:
+            camera = Camera(args.camera, args.backend, size)
+        except RuntimeError as e:
+            sys.exit(str(e))
     pygame.init()
-    camera = Camera(0, "auto", (640, 480))
-    demo = Demo(camera, ["A", "B"])
+    demo = Demo(camera, ["A"] if args.one_hand else ["A", "B"], args.debug, args.practice)
     camera.demo = demo
     try:
         demo.run()
