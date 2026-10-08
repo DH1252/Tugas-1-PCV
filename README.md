@@ -34,3 +34,23 @@ Then hold a marker in the START circle (or press Space). Swing fast through orbs
 | S | save a snapshot to `debug/` |
 | Esc | quit |
 
+## How it works
+
+Each camera frame goes through these steps in `tracking.py`:
+
+1. Mirror the frame and shrink it to 320×240.
+2. Correct for light changes by comparing the walls with the picture of the empty room.
+3. Convert to HSV and keep the pixels inside the marker's learned hue, saturation and brightness range.
+4. Ignore places that already had the marker's color in the empty room.
+5. Remove specks and fill holes with morphological opening and closing.
+6. Find the blobs and take the center of each blob's thickest part (the palm of a glove).
+7. Follow the marker with a Kalman filter, which also predicts its position through a few missed frames.
+
+`game.py` runs the orbs with Pymunk physics. A swing counts as the line between two camera frames, tested against where each orb was when the frame was captured, which makes up for the camera's delay.
+
+| File | Contents |
+|---|---|
+| `main.py` | window, game states, drawing, options |
+| `tracking.py` | calibration and color tracking |
+| `game.py` | orbs, physics, scoring |
+| `camera.py` | webcam input on a background thread |
