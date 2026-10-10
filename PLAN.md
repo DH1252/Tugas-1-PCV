@@ -145,7 +145,7 @@ Webcam frame (BGR 640×480, mirrored) ──downscale ×0.5──►
    ▼                                                                         ▲
  [E5] ∧ calibrated YCrCb gate                                                │
    ▼                                                                         │ [E9c] adaptive
- [E6] denoise: opening (remove specks) → closing (fill gaps) · fill holes  │  histogram
+ [E6] denoise: opening (remove specks) → closing (fill gaps) · fill holes    │  histogram
    ▼                                                                         │  update (EMA)
  [E7] face removal · contour filter and scoring                              │
    ▼                                                                         │
