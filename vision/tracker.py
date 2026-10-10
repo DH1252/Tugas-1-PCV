@@ -29,6 +29,16 @@ def preset(kind):
     return dict.fromkeys(ENHANCEMENTS, kind != "baseline")
 
 
+def cumulative(k):
+    return {e: i < k for i, e in enumerate(ENHANCEMENTS)}
+
+
+def calib_box(cfg, size):
+    w, h = size
+    bx, by, bw, bh = cfg["vision"]["calib_box"]
+    return int(bx * w), int(by * h), int(bw * w), int(bh * h)
+
+
 class HandTracker:
     def __init__(self, cfg, hands=1, toggles=None):
         self.cfg = cfg
@@ -91,9 +101,7 @@ class HandTracker:
         self.reset()
 
     def calib_box(self, size):
-        w, h = size
-        bx, by, bw, bh = self.v["calib_box"]
-        return int(bx * w), int(by * h), int(bw * w), int(bh * h)
+        return calib_box(self.cfg, size)
 
     def start_calibration(self):
         self.calib_frames = []
@@ -101,9 +109,9 @@ class HandTracker:
     def add_calibration_frame(self, frame):
         self.calib_frames.append(self._small(frame))
 
-    def finish_calibration(self, size):
+    def finish_calibration(self, size, roi=None):
         s = self.v["scale"]
-        self.calib_roi = tuple(int(round(c * s)) for c in self.calib_box(size))
+        self.calib_roi = tuple(int(round(c * s)) for c in (roi or self.calib_box(size)))
         self._build_model()
         self.reset()
 
@@ -243,7 +251,7 @@ class HandTracker:
         self.mask = mask
         self.hand_mask = np.zeros_like(mask)
         for c in used:
-            self.hand_mask = cv2.bitwise_or(self.hand_mask, c.blob)
+            self.hand_mask = cv2.bitwise_or(self.hand_mask, c.hand_blob if c.hand_blob is not None else c.blob)
         self._adapt(used, hsv, gate)
         self._lap("total", [start])
         if self.debug_enabled:

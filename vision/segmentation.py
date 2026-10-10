@@ -70,6 +70,7 @@ class Candidate:
     bbox: tuple
     center: tuple
     blob: np.ndarray = None
+    hand_blob: np.ndarray = None
     radius: float = 0.0
     fingers: int = -1
     hand_contour: np.ndarray = None

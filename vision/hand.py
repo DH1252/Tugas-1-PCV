@@ -54,6 +54,7 @@ def count_fingers(contour, center, r, depth_ratio, max_angle, fist_ratio):
 def measure(cand, dist, light, v):
     center, r = palm_center(dist, cand.blob, cand.bbox, v["palm_top_bias"])
     cand.center, cand.radius = center, r
+    cand.hand_blob = hand_region(cand.blob, center, r, v["arm_cut"], v["wrist_cut"])
     near = cv2.bitwise_and(light, cv2.dilate(cand.blob, np.ones((5, 5), np.uint8)))
     region = hand_region(near, center, r, v["arm_cut"], v["wrist_cut"])
     cand.hand_contour = largest_contour(region)
