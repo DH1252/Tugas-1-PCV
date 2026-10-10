@@ -13,7 +13,7 @@ pipeline** that we compare against a plain fixed-threshold baseline.
 |---|---|
 | Playable game driven only by hand movement (one or two hands) | Live demo plus a recorded video |
 | Baseline HSV tracker (fixed thresholds) | `--tracker baseline` |
-| Enhanced HSV tracker, with each enhancement switchable on and off | `--tracker enhanced` and live hotkeys `1`–`8` |
+| Enhanced HSV tracker, with each enhancement switchable on and off | `--tracker enhanced` and live hotkeys `1`–`9` |
 | Measured improvement of enhanced over baseline | Ablation table from the `eval/` harness on recorded clips |
 
 **Constraint: colour-based tracking only.** No MediaPipe, and no learned detectors of any
@@ -85,7 +85,7 @@ CALIBRATE ──► MENU ──► PLAY ⇄ PAUSE ──► GAME_OVER ──► 
 | Input | When | Action |
 |---|---|---|
 | Hand touches a ball | PLAY | Bounce. A faster upward swing gives a stronger hit. |
-| Hold up 1, 2 or 3 fingers for 1 s | MENU | Choose option 1, 2 or 3 (Play, Practice, Recalibrate). Uses finger counting (E7). |
+| Hold up 1, 2 or 3 fingers for 1 s | MENU | Choose option 1, 2 or 3 (Play, Practice, Recalibrate). Uses finger counting (E8). |
 | Hover over a button for 1.2 s (radial progress ring) | MENU, GAME_OVER | Same as above. This works even when finger counting is unreliable. |
 | Fist held 1 s | MENU, GAME_OVER | Confirm or start |
 | Hover over the pause icon (top corner) for 1 s | PLAY | Pause |
@@ -97,7 +97,7 @@ never triggers a menu action by accident.
 
 ### Keyboard (developer and demo controls)
 `c` recalibrate · `d` debug overlay · `b` switch baseline/enhanced · `h` switch one/two hands ·
-`1`–`8` toggle enhancements E1–E8 · `p` pause · `q`/`Esc` quit
+`1`–`9` toggle enhancements E1–E9 · `p` pause · `q`/`Esc` quit
 
 ### HUD
 Score, lives, balls in play, streak, and a **tracking-confidence bar** for each hand. The bars
@@ -144,12 +144,14 @@ Webcam frame (BGR 640×480, mirrored) ──downscale ×0.5──►
  [E3] per-user calibration ──► [E4] back-project H–S *ratio* histogram ──► probability map
    ▼                                                                         ▲
  [E5] ∧ calibrated YCrCb gate                                                │
-   ▼                                                                         │ [E8c] adaptive
- [E6] threshold · open/close · fill holes · face removal · contour scoring   │  histogram
+   ▼                                                                         │ [E9c] adaptive
+ [E6] denoise: opening (remove specks) → closing (fill gaps) · fill holes  │  histogram
    ▼                                                                         │  update (EMA)
- [E7] palm centre (distance transform) · arm cut · hull/defects → fingers ───┘
+ [E7] face removal · contour filter and scoring                              │
+   ▼                                                                         │
+ [E8] palm centre (distance transform) · arm cut · hull/defects → fingers ───┘
    ▼
- [E8] per-hand Kalman (gating, search ROI, coasting) · One Euro smoothing · two-hand assignment
+ [E9] per-hand Kalman (gating, search ROI, coasting) · One Euro smoothing · two-hand assignment
    ▼
  list[HandState{id, found, palm, radius, velocity, fingers, gesture, confidence, contour}]
 ```
@@ -163,9 +165,10 @@ Webcam frame (BGR 640×480, mirrored) ──downscale ×0.5──►
 | **E3** | **Per-user calibration** | Hard-coded ranges fail across skin tones and rooms | Sample the ROI over about 60 frames and build a 2-D H–S histogram (30×32 bins). Also store 2nd–98th percentile H, S, V and Cr, Cb as fallback box thresholds. Save to `calibration.json`. | Must |
 | **E4** | **Discriminative histogram back-projection** (Swain & Ballard ratio histogram) | A box threshold is binary and also takes in background colours that look like skin | `R = min(H_hand / (H_bg + ε), 1)` where `H_bg` is sampled outside the ROI at calibration. `cv2.calcBackProject` gives a per-pixel probability, then blur and threshold it (τ ≈ 50/255). Colours common in the background are down-weighted automatically. | Must |
 | **E5** | **Hybrid colour-space fusion**: AND with a YCrCb gate | Some false positives are separable in Cr/Cb but not in H–S | The Cr/Cb range comes from calibration percentiles ± a margin. Fall back to Chai & Ngan (Cr 133–173, Cb 77–127). It is loose on purpose, a veto rather than the main detector. | Should |
-| **E6** | **Mask cleanup, face removal and contour scoring** | Speckle, holes, and the face or other skin blobs being picked as a hand | Morphological open (ellipse 5×5) then close (9×9), and fill holes. **Face removal without a detector:** at calibration, the largest skin blob outside the hand box is taken as the face. It is then tracked with **CamShift** on the same back-projection map, which is what CamShift was originally designed for (Bradski 1998). Its window stops updating when its area jumps, which means a hand has merged into it. Its ellipse plus a margin is removed from the hand mask. Keep contours with area 1.5–40% of the frame and solidity ≥ 0.45. Rank them by score = size + motion (overlap with a frame-difference mask) + closeness to a Kalman prediction − a penalty for being still, elliptical and without finger gaps. Take the top 1 or 2. | Must (face and motion: Should) |
-| **E7** | **Hand geometry** | The centroid drifts toward the forearm; paddle size and gestures are needed | Palm centre = arg-max of `cv2.distanceTransform`, with palm radius r = its value. The paddle radius is 2r. Cut the mask outside a 2.5r circle, which removes the forearm. Use `convexHull` + `convexityDefects` with depth > 0.4r and angle < 90°, so fingers = defects + 1. Treat it as a fist if the farthest hull point is < 1.6r away. Debounce with a majority vote over 8 frames. | Must (palm centre), Should (fingers) |
-| **E8** | **Temporal filtering and two-hand tracking** | Jitter, short dropouts, slow full-frame search, hands swapping identity | (a) A `cv2.KalmanFilter` per hand with constant velocity. It predicts the next position, rejects jumps more than 80 px from the prediction, carries the paddle through up to 5 lost frames, and limits the search to an ROI around the prediction. Its velocity estimate drives the ball physics. (b) A **One Euro filter** (Casiez et al., 2012) on the paddle position: little smoothing when the hand is slow, so the paddle stays steady, and little lag when it is fast, so swats land. (c) **Adaptive model update**: every 10 frames, if confidence > 0.7, `H_hand ← (1−α)H_hand + α·H_current` with α ≈ 0.03, using pixels from the *eroded* contour only. Reset on `c` or after a long loss so drift can't build up. (d) **Two hands:** match blobs to tracks by trying both pairings and keeping the one with the smaller total distance to the predictions. A track starts after 3 frames in a row with a detection and ends after 5 frames of coasting. When the hands touch and merge into one blob, both tracks coast on their predictions until the blob splits again. | Must (a, b), Should (d), Could (c) |
+| **E6** | **Morphological denoising: opening then closing** | The raw mask has isolated false pixels (sensor noise, small skin-coloured patches in the background) and holes inside the hand (shadows, highlights, knuckle creases). Fingers can also break away from the palm. | **Opening** (erode then dilate, elliptical 5×5 kernel) removes specks smaller than the kernel without shrinking the hand. **Closing** (dilate then erode, elliptical 9×9) fills holes and reconnects fingers. Opening comes first so closing doesn't grow the noise. Holes still left are filled by redrawing each outer contour filled. Elliptical kernels keep the hand outline rounder than square ones. The baseline only has a square 3×3 erode/dilate (an opening with no closing), so this step is measured on its own. If closing merges the fingers, E8 counts fingers on a mask closed with a smaller kernel. | Must |
+| **E7** | **Face removal and contour scoring** | The face or other skin blobs being picked as a hand | **Face removal without a detector:** at calibration, the largest skin blob outside the hand box is taken as the face. It is then tracked with **CamShift** on the same back-projection map, which is what CamShift was originally designed for (Bradski 1998). Its window stops updating when its area jumps, which means a hand has merged into it. Its ellipse plus a margin is removed from the hand mask. Keep contours with area 1.5–40% of the frame and solidity ≥ 0.45. Rank them by score = size + motion (overlap with a frame-difference mask) + closeness to a Kalman prediction − a penalty for being still, elliptical and without finger gaps. Take the top 1 or 2. | Must (scoring), Should (face, motion) |
+| **E8** | **Hand geometry** | The centroid drifts toward the forearm; paddle size and gestures are needed | Palm centre = arg-max of `cv2.distanceTransform`, with palm radius r = its value. The paddle radius is 2r. Cut the mask outside a 2.5r circle, which removes the forearm. Use `convexHull` + `convexityDefects` with depth > 0.4r and angle < 90°, so fingers = defects + 1. Treat it as a fist if the farthest hull point is < 1.6r away. Debounce with a majority vote over 8 frames. | Must (palm centre), Should (fingers) |
+| **E9** | **Temporal filtering and two-hand tracking** | Jitter, short dropouts, slow full-frame search, hands swapping identity | (a) A `cv2.KalmanFilter` per hand with constant velocity. It predicts the next position, rejects jumps more than 80 px from the prediction, carries the paddle through up to 5 lost frames, and limits the search to an ROI around the prediction. Its velocity estimate drives the ball physics. (b) A **One Euro filter** (Casiez et al., 2012) on the paddle position: little smoothing when the hand is slow, so the paddle stays steady, and little lag when it is fast, so swats land. (c) **Adaptive model update**: every 10 frames, if confidence > 0.7, `H_hand ← (1−α)H_hand + α·H_current` with α ≈ 0.03, using pixels from the *eroded* contour only. Reset on `c` or after a long loss so drift can't build up. (d) **Two hands:** match blobs to tracks by trying both pairings and keeping the one with the smaller total distance to the predictions. A track starts after 3 frames in a row with a detection and ends after 5 frames of coasting. When the hands touch and merge into one blob, both tracks coast on their predictions until the blob splits again. | Must (a, b), Should (d), Could (c) |
 
 **Confidence** combines the mean back-projection inside the contour, solidity, whether the
 area is plausible, and how far the measurement is from the Kalman prediction. It feeds the HUD
@@ -173,7 +176,7 @@ bars, the adaptive update gate and the auto-pause.
 
 ### Starting parameters (tune live with debug-mode trackbars, save to `config.yaml`)
 - **Vision:** processing size 320×240 · blur 5×5 · S ≥ 30, 40 ≤ V ≤ 250 · hue shift +20 ·
-  H–S bins 30×32 · back-projection τ = 50 · open 5×5 / close 9×9 · area 1.5–40% ·
+  H–S bins 30×32 · back-projection τ = 50 · open 5×5 / close 9×9 (elliptical) · area 1.5–40% ·
   solidity ≥ 0.45 · face margin 15%
 - **Tracking:** Kalman gate 80 px, max coast 5 frames, track birth 3 frames · One Euro
   `min_cutoff=1.0, beta=0.02, d_cutoff=1.0` · α = 0.03 every 10 frames
@@ -196,12 +199,12 @@ tugas-1-pcv/
 │   ├── capture.py          # webcam or video-file source, mirroring, FPS counter
 │   ├── baseline.py         # §3
 │   ├── preprocess.py       # E1, E2
-│   ├── calibration.py      # E3 (+ background hist for E4, face seed for E6), load/save calibration.json
-│   ├── segmentation.py     # E4, E5, E6 (mask, frame differencing, contour scoring)
-│   ├── face.py             # E6 CamShift face track
-│   ├── hand.py             # E7 geometry and gestures
-│   ├── filters.py          # E8 Kalman, One Euro, adaptive update
-│   ├── tracker.py          # HandTracker: runs the stages, honours E1–E8 toggles, two-hand assignment → list[HandState]
+│   ├── calibration.py      # E3 (+ background hist for E4, face seed for E7), load/save calibration.json
+│   ├── segmentation.py     # E4, E5, E6, E7 (mask, opening/closing, frame differencing, contour scoring)
+│   ├── face.py             # E7 CamShift face track
+│   ├── hand.py             # E8 geometry and gestures
+│   ├── filters.py          # E9 Kalman, One Euro, adaptive update
+│   ├── tracker.py          # HandTracker: runs the stages, honours E1–E9 toggles, two-hand assignment → list[HandState]
 │   └── state.py            # HandState dataclass, Gesture enum
 ├── game/
 │   ├── engine.py           # main loop, state machine, dt-based timing
@@ -241,6 +244,7 @@ This doubles as report figures.
   - Kalman coasting
   - two-hand assignment keeps identities when two synthetic tracks cross
   - hue rotation maps 175 and 5 into one interval
+  - opening removes specks smaller than its kernel, closing fills holes, and the hand's area changes by less than 5%
   - ratio histogram down-weights a colour present in both hand and background samples
   - palm centre and finger count on synthetic hand silhouettes
 - **Replay mode:** `--video clip.mp4` runs the full game or tracker on recorded footage, so
@@ -257,12 +261,12 @@ held still, for the jitter metric. Conditions:
 | # | Condition | Stresses |
 |---|---|---|
 | C1 | Bright, neutral light, plain background | Sanity check |
-| C2 | Dim light | E2 gating, E4 |
+| C2 | Dim light (noisy sensor) | E2 gating, E4, E6 denoising |
 | C3 | Warm (yellow) lamp | E1 white balance, E3 calibration |
-| C4 | Cluttered background with skin-like objects (wood, cardboard) | E4 ratio histogram, E5, E6 |
-| C5 | Face in view, hands passing in front of the face, short sleeves | E6 face removal, E7 arm cut |
-| C6 | Fast upward swats | E8 Kalman and One Euro |
-| C7 | Two hands crossing and touching | E8 two-hand assignment |
+| C4 | Cluttered background with skin-like objects (wood, cardboard) | E4 ratio histogram, E5, E7 |
+| C5 | Face in view, hands passing in front of the face, short sleeves | E7 face removal, E8 arm cut |
+| C6 | Fast upward swats | E9 Kalman and One Euro |
+| C7 | Two hands crossing and touching | E9 two-hand assignment |
 
 If possible, record with 2–3 people of different skin tones. Per-user calibration (E3) is
 meant to fix the fairness problem that fixed thresholds have.
@@ -281,7 +285,7 @@ to get masks.
 - Gameplay: in **PRACTICE** mode, the same player plays 2 minutes with each tracker. Record
   hits per minute, drops per minute and the longest streak.
 
-**Ablation.** Add enhancements cumulatively: Baseline → +E1 → +E2 → … → +E8, one row per
+**Ablation.** Add enhancements cumulatively: Baseline → +E1 → +E2 → … → +E9, one row per
 step and columns for metrics × conditions. Also run leave-one-out on the full pipeline to find
 the enhancements that matter most. `eval/evaluate.py` produces the CSV, a markdown table and
 bar charts for the report.
@@ -295,7 +299,7 @@ bar charts for the report.
 | **0. Setup** | Skeleton, `requirements.txt`, capture with mirroring and FPS counter, `--video` replay, `HandState` | Webcam window shows FPS; replay works | ½ day |
 | **1. Vertical slice** | Baseline tracker (one hand), one ball type, physics with substeps, paddle ring, HUD, lives, game over | **Playable end-to-end with the baseline** | 1½ days |
 | **2. Eval harness first** | `record.py`, `annotate.py`, `evaluate.py`; record C1–C7; measure the baseline | Baseline row of the ablation table filled in | 1 day |
-| **3. Enhancements** | E1 → E8, each behind a toggle, unit-tested, and measured as soon as it lands | Every "Must" in §4 done and measured | 3–4 days |
+| **3. Enhancements** | E1 → E9, each behind a toggle, unit-tested, and measured as soon as it lands | Every "Must" in §4 done and measured | 3–4 days |
 | **4. Two hands** | Top-2 contour selection, two-hand assignment, face removal hardened for two-hand play | C7 identity swaps measured; two-hand play is stable | 1 day |
 | **5. Game polish** | Calibration screen, finger-count and dwell menus, pause and resume, auto-pause, item types, difficulty ramp, PRACTICE mode, sprites, debug overlay, optional sound | Gesture-only play through the menus | 1½ days |
 | **6. Report and demo** | Final ablation, pipeline-stage figures, README, 2–3 min demo video showing live toggles | Deliverables submitted | 1 day |
@@ -309,15 +313,16 @@ than guessed at.
 
 | Risk | Mitigation |
 |---|---|
-| Face picked as a hand, especially as the second hand | CamShift face track removed from the mask, plus a scoring penalty for still, elliptical blobs without finger gaps (E6) |
+| Face picked as a hand, especially as the second hand | CamShift face track removed from the mask, plus a scoring penalty for still, elliptical blobs without finger gaps (E7) |
 | Hand in front of the face is partly cut out with the face | Kalman coasting carries the paddle for up to 5 frames. The calibration screen suggests sitting so the face is near the top centre of the frame and most play happens beside it. |
-| Forearm in the mask (short sleeves) | Distance-transform palm centre and 2.5r cut (E7). For the demo, long sleeves are a valid fallback. |
+| Forearm in the mask (short sleeves) | Distance-transform palm centre and 2.5r cut (E8). For the demo, long sleeves are a valid fallback. |
 | Fast swats pass through balls | 4 physics substeps with interpolated hand positions, and Kalman velocity for the hit |
 | Tracking lag makes hits feel late | One Euro filter instead of heavy smoothing. Could also predict the hand about 1 frame ahead from the Kalman velocity. |
 | Jitter kicks balls randomly | One Euro smoothing, the hand-speed cap, and bouncing only when the ball is moving toward the hand |
-| Two hands merge into one blob or swap identities | Both tracks coast while merged; the pairing with the smaller total distance decides identities when they split (E8d) |
-| Camera auto-exposure or white balance drifts mid-game | Lock AE/AWB where the backend allows (E1), gray-world WB, and the adaptive histogram (E8c) |
+| Two hands merge into one blob or swap identities | Both tracks coast while merged; the pairing with the smaller total distance decides identities when they split (E9d) |
+| Camera auto-exposure or white balance drifts mid-game | Lock AE/AWB where the backend allows (E1), gray-world WB, and the adaptive histogram (E9c) |
 | Adaptive histogram drifts onto the background | Update only from the eroded contour, only when confidence is high, small α, and reset on `c` or a long loss |
+| Closing merges fingers, so finger counts drop | Keep the closing kernel smaller than the gap between fingers, and count fingers on a lightly closed mask (E6) |
 | Finger counting is unreliable | Every menu choice also works by hovering. Gestures are debounced over 8 frames and do nothing during PLAY. |
 | Below 30 fps on a weak laptop | 320×240 processing, ROI search, per-stage timing in debug mode |
 | Skin-coloured walls or furniture at home | Discriminative ratio histogram (E4) and recalibration; record condition C4 deliberately |
