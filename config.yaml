@@ -1,0 +1,108 @@
+camera:
+  index: 0
+  width: 640
+  height: 480
+  mirror: true
+  lock_auto: false
+
+display:
+  scale: 1.5
+
+vision:
+  scale: 0.5
+  blur: 5
+  wb_clip: [0.6, 1.6]
+  wb_smooth: 0.1
+  hue_shift: 20
+  s_min: 30
+  v_min: 40
+  v_max: 250
+  baseline_lo: [0, 48, 80]
+  baseline_hi: [20, 255, 255]
+  calib_box: [0.66, 0.40, 0.10, 0.15]
+  calib_frames: 40
+  calib_core_mass: 0.9
+  h_bins: 30
+  s_bins: 32
+  percentiles: [2, 98]
+  box_margin: [4, 15, 25]
+  min_hand_bin: 0.02
+  backproject_blur: 5
+  backproject_thresh: 90
+  ycrcb_default_lo: [0, 133, 77]
+  ycrcb_default_hi: [255, 173, 127]
+  ycrcb_margin: 8
+  open_kernel: 5
+  close_kernel: 9
+  min_blob: 0.002
+  min_area: 0.008
+  max_area: 0.4
+  min_solidity: 0.45
+  motion_thresh: 15
+  face_min_area: 0.01
+  face_margin: 0.15
+  face_max_jump: 1.6
+  face_max_shift: 0.25
+  score_weights: {size: 1.0, motion: 0.5, proximity: 1.0, face: 0.6}
+  palm_top_bias: 0.15
+  arm_cut: 3.0
+  wrist_cut: 1.3
+  defect_depth: 0.4
+  defect_angle: 90
+  fist_ratio: 1.7
+
+tracking:
+  gate: 100
+  max_coast: 5
+  birth: 3
+  accel_noise: 2000
+  meas_noise: 4
+  one_euro: {min_cutoff: 1.0, beta: 0.02, d_cutoff: 1.0}
+  finger_vote: 8
+  adapt_alpha: 0.03
+  adapt_every: 10
+  adapt_conf: 0.7
+  paddle_scale: 2.0
+  paddle_min: 30
+  paddle_max: 90
+  baseline_paddle: 50
+  radius_smooth: 0.2
+
+physics:
+  gravity: 600
+  restitution_hand: 0.85
+  restitution_wall: 0.9
+  min_up_speed: 600
+  max_speed: 1500
+  max_hand_speed: 2500
+  substeps: 4
+  hit_cooldown: 0.15
+
+game:
+  lives: 3
+  respawn_delay: 1.0
+  spawn_gap: 0.6
+  add_ball_every: 20
+  max_balls: 4
+  gravity_step_every: 30
+  gravity_step: 0.05
+  extra_item_every: [6, 10]
+  spike_chance: [0.3, 0.6]
+  heavy_chance: [0.1, 0.3]
+  balloon_chance: 0.15
+  ramp_seconds: 120
+  star_points: 5
+  streak_every: 10
+  dwell_time: 1.2
+  gesture_hold: 1.0
+  pause_dwell: 1.0
+  auto_pause: 1.5
+  calib_countdown: 3.0
+  practice_seconds: 120
+  practice_gravity: 0.6
+  items:
+    ball: {gravity: 1.0, drag: 0.0, bounce: 1.0, radius: 22}
+    balloon: {gravity: 0.35, drag: 0.8, bounce: 0.9, radius: 28}
+    heavy: {gravity: 1.6, drag: 0.0, bounce: 0.6, radius: 24}
+    spike: {gravity: 0.8, drag: 0.0, bounce: 1.0, radius: 22}
+    star: {gravity: 0.4, drag: 0.5, bounce: 1.0, radius: 18}

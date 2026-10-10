@@ -1,1 +1,8 @@
 CLAUDE.md
+__pycache__/
+.pytest_cache/
+*.pyc
+.venv/
+calibration.npz
+practice_log.csv
+clips/
