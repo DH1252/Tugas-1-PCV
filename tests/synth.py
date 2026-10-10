@@ -32,9 +32,19 @@ def make_frame(hands=(), face=(320, 110), size=(640, 480), noise=4, seed=0, back
         else:
             draw_hand(img, spec)
     if noise:
-        rng = np.random.default_rng(seed)
-        img = np.clip(img.astype(np.int16) + rng.normal(0, noise, img.shape), 0, 255).astype(np.uint8)
+        img = cv2.add(img.astype(np.int16), _noise(img.shape, noise, seed % 8), dtype=cv2.CV_16S)
+        img = np.clip(img, 0, 255).astype(np.uint8)
     return img
+
+
+_NOISE = {}
+
+
+def _noise(shape, sigma, k):
+    key = (shape, sigma, k)
+    if key not in _NOISE:
+        _NOISE[key] = np.random.default_rng(k).normal(0, sigma, shape).astype(np.int16)
+    return _NOISE[key]
 
 
 def calibration_frames(cfg, n=None, size=(640, 480), face=(320, 110)):
