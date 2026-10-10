@@ -11,7 +11,7 @@ display:
 vision:
   scale: 0.5
   blur: 5
-  wb_clip: [0.6, 1.6]
+  wb_clip: [0.7, 1.4]
   wb_smooth: 0.1
   hue_shift: 20
   s_min: 30
@@ -41,7 +41,7 @@ vision:
   motion_thresh: 15
   face_min_area: 0.01
   face_margin: 0.15
-  face_max_jump: 1.6
+  face_max_jump: 1.35
   face_max_shift: 0.25
   score_weights: {size: 1.0, motion: 0.5, proximity: 1.0, face: 0.6}
   palm_top_bias: 0.15
@@ -54,6 +54,7 @@ vision:
 tracking:
   gate: 100
   max_coast: 5
+  max_merge: 60
   birth: 3
   accel_noise: 2000
   meas_noise: 4
