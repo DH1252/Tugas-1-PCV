@@ -94,6 +94,7 @@ game:
   ramp_seconds: 120
   star_points: 5
   streak_every: 10
+  max_multiplier: 5
   dwell_time: 1.2
   gesture_hold: 1.0
   pause_dwell: 1.0
