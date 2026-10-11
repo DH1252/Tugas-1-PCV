@@ -4,7 +4,7 @@ camera:
   fourcc: MJPG
   stall_timeout: 2.0
   read_timeout: 1.0
-  open_timeout: 10.0
+  probe_timeout: 4.0
   width: 640
   height: 480
   mirror: true

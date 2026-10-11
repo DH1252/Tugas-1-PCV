@@ -43,17 +43,35 @@ def lock_auto(cap):
             break
 
 
+def attempts(cam):
+    names = [cam.get("backend", "msmf"), "msmf", "dshow", "auto"]
+    if sys.platform != "win32":
+        names = ["v4l2" if n == "v4l2" else "auto" for n in names]
+    fourccs = [cam.get("fourcc"), None] if cam.get("fourcc") else [None]
+    out = []
+    for name in dict.fromkeys(names):
+        for fourcc in fourccs:
+            out.append({**cam, "backend": name, "fourcc": fourcc})
+    return out
+
+
+def describe(cam):
+    return f"camera {cam['index']} via {cam['backend']}" + (f" ({cam['fourcc']})" if cam.get("fourcc") else "")
+
+
 def list_cameras(cam, max_index=8):
     found = []
     for i in range(max_index):
-        try:
-            cap = open_camera({**cam, "index": i})
-        except RuntimeError:
-            continue
-        ok, frame = cap.read()
-        cap.release()
-        if ok and frame is not None:
-            found.append((i, frame.shape[1], frame.shape[0]))
+        for attempt in attempts({**cam, "index": i}):
+            try:
+                cap = open_camera(attempt)
+            except RuntimeError:
+                continue
+            ok, frame = cap.read()
+            cap.release()
+            if ok and frame is not None:
+                found.append((i, frame.shape[1], frame.shape[0]))
+                break
     return found
 
 
@@ -115,9 +133,7 @@ class Source:
         self.seen = 0
         self.stamp = time.perf_counter()
         self.reader = None
-        self._start_reader()
-        self._wait_first(cam.get("open_timeout", 10.0))
-        self.fps = self.reader.fps or 30.0
+        self._open(cam)
 
     def _start_reader(self):
         if self.reader is not None:
@@ -145,26 +161,42 @@ class Source:
                 left = deadline - time.perf_counter()
                 if left <= 0:
                     self.reader.stop()
-                    raise RuntimeError(f"camera {self.cam['index']} gave no frames")
+                    raise RuntimeError("no frames")
                 self.cond.wait(min(left, 0.1))
+
+    def _try(self, cam):
+        self.cam = cam
+        with self.cond:
+            self.frame = None
+            self.seen = self.seq
+            self._start_reader()
+        self._wait_first(cam.get("probe_timeout", 4.0))
+        self.fps = self.reader.fps or 30.0
+
+    def _open(self, cam):
+        errors = []
+        for attempt in attempts(cam):
+            try:
+                self._try(attempt)
+                print(f"using {describe(attempt)}", file=sys.stderr)
+                return
+            except RuntimeError as e:
+                errors.append(f"{describe(attempt)}: {e}")
+                print(f"{describe(attempt)} failed: {e}", file=sys.stderr)
+        raise RuntimeError(f"camera {cam['index']} gave no frames. Tried:\n  " + "\n  ".join(errors)
+                           + "\nClose other apps using the camera, check Windows camera privacy settings, "
+                             "or try another index (--list-cameras).")
 
     def switch(self, index):
         if self.is_file or index == self.cam["index"]:
             return False
         old = self.cam
-        for cam in ({**old, "index": index}, old):
-            self.cam = cam
-            with self.cond:
-                self.frame = None
-                self.seen = self.seq
-                self._start_reader()
-            try:
-                self._wait_first(self.cam.get("open_timeout", 10.0))
-            except RuntimeError:
-                continue
-            self.fps = self.reader.fps or 30.0
-            return cam is not old
-        raise RuntimeError("no camera available")
+        try:
+            self._open({**old, "index": index})
+            return True
+        except RuntimeError:
+            self._try(old)
+            return False
 
     @property
     def stalled(self):

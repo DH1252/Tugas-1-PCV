@@ -89,7 +89,7 @@ def test_switch_camera(fake):
 def test_switch_to_dead_camera_reverts(fake, monkeypatch):
     src = capture.Source(fake)
     monkeypatch.setattr(FakeCapture, "isOpened", lambda self: self.index != 5)
-    fake["camera"]["open_timeout"] = 0.5
+    fake["camera"]["probe_timeout"] = 0.3
     assert not src.switch(5)
     assert src.cam["index"] == 0 and src.read() is not None
     src.release()
@@ -98,3 +98,22 @@ def test_switch_to_dead_camera_reverts(fake, monkeypatch):
 def test_list_cameras(fake, monkeypatch):
     monkeypatch.setattr(FakeCapture, "isOpened", lambda self: self.index in (0, 2))
     assert [c[0] for c in capture.list_cameras(fake["camera"], 4)] == [0, 2]
+
+
+def test_falls_back_when_backend_gives_no_frames(fake, monkeypatch):
+    monkeypatch.setattr(capture.sys, "platform", "win32")
+    real_read = FakeCapture.read
+    monkeypatch.setattr(FakeCapture, "read",
+                        lambda self: (False, None) if self.api == capture.cv2.CAP_MSMF else real_read(self))
+    fake["camera"]["probe_timeout"] = 0.3
+    src = capture.Source(fake)
+    assert src.cam["backend"] == "dshow" and src.read() is not None
+    src.release()
+
+
+def test_attempt_order(cfg):
+    cam = dict(cfg["camera"], backend="msmf", fourcc="MJPG")
+    order = [(a["backend"], a["fourcc"]) for a in capture.attempts(cam)]
+    if capture.sys.platform == "win32":
+        assert order[:3] == [("msmf", "MJPG"), ("msmf", None), ("dshow", "MJPG")]
+    assert order[-1][0] == "auto"
