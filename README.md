@@ -107,6 +107,24 @@ Items: **ball** (normal), **balloon** (slow and floaty), **heavy** (needs a firm
 **spike** (don't touch it, let it fall), **star** (touch it for a life or points). You lose a
 life when a ball reaches the bottom or when you touch a spike.
 
+### Cursor
+
+The cursor (the ring and dot) sits on the **top part of the glove blob**: the centre of a thin
+band across the fingertips. This is steadier than the palm centre, which can hop between palm
+and wrist as the hand turns, and it's where balls hit. Set `vision.cursor_anchor: palm` to go
+back to the palm centre (the ring then works best with `tracking.paddle_scale: 2.0`).
+
+- **Screen edges:** the middle 80% of the camera view is stretched to cover the whole screen
+  (`game.cursor_margin: [0.1, 0.1]`), so you can reach the edges without your hand leaving the
+  camera's view, where it gets cut off and jumps. Set it to `[0, 0]` for a 1:1 cursor.
+- **Spike filter:** a single-frame jump bigger than about 60 px is ignored unless the next
+  frame confirms it.
+- **Hand leaving the view:** the cursor no longer flies off. Its predicted motion slows down
+  while the hand is missing and is kept inside the frame.
+- **Touching a look-alike:** when the glove touches another glove-coloured object, the
+  previous frame's glove mask is shifted by the hand's speed and used to keep only the glove's
+  part of the merged blob.
+
 ### Keeping track (colour-only robustness)
 
 These all use colour only, no learned detectors:

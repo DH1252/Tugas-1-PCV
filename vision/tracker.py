@@ -80,6 +80,7 @@ class HandTracker:
         self.tracks = []
         self.next_id = 0
         self.still = None
+        self.others = None
         self.prev = {}
         self.last_t = None
         self.frame_count = 0
@@ -247,9 +248,13 @@ class HandTracker:
             light = mask
         self._lap("denoise", clock)
 
+        self.skipped = set()
+        self.merging = False
         if T["E9"]:
+            fw, fh = frame.shape[1], frame.shape[0]
             for tr in self.tracks:
                 tr.predict(dt)
+                tr.pred = tr.kalman.clamp(fw, fh)
         preds = [tuple(tr.pred * v["scale"]) for tr in self.tracks] if T["E9"] else []
         motion = None
         if T["E7"]:
@@ -262,6 +267,16 @@ class HandTracker:
         n_px = mask.shape[0] * mask.shape[1]
         cands = segmentation.find_candidates(mask, v["min_blob"] * n_px, v["min_area"] * n_px,
                                              v["max_area"] * n_px, v["min_solidity"], T["E7"])
+        top_anchor = T["E8"] and v.get("cursor_anchor", "top") == "top"
+        if top_anchor:
+            for c in cands:
+                blob = segmentation.blob_mask(c, mask.shape)
+                band = v["top_band"] * np.sqrt(c.area)
+                tr = self._grown_from(c) if T["E9"] else None
+                if tr is not None:
+                    blob = self._propagate(tr, blob, dt)
+                    band = v["top_band"] * np.sqrt(tr.area)
+                c.point = hand.top_point(blob, c.bbox, band) or c.center
         if T["E7"]:
             segmentation.score_candidates(cands, prob, motion, preds, tc["gate"] * v["scale"], v["score_weights"])
             cands.sort(key=lambda c: -c.score)
@@ -282,18 +297,22 @@ class HandTracker:
             dist = cv2.distanceTransform(shape_mask, cv2.DIST_L2, 5)
             for c in cands:
                 near = None
-                if T["E9"] and self.tracks:
-                    tr = min(self.tracks, key=lambda q: np.hypot(q.pred[0] * v["scale"] - c.center[0],
-                                                                 q.pred[1] * v["scale"] - c.center[1]))
-                    if tr.area and c.area > tc["merge_growth"] * tr.area:
+                if T["E9"] and not top_anchor:
+                    tr = self._grown_from(c)
+                    if tr is not None:
                         near = tuple(tr.pred * v["scale"])
                 hand.measure(c, dist, light, v, near, tc["gate"] * v["scale"] * 0.5)
         self._lap("contours", clock)
 
-        states, used = self._track(cands, t, inv) if T["E9"] else self._raw(cands, dt, inv)
+        states, used = self._track(cands, t, dt, inv) if T["E9"] else self._raw(cands, dt, inv)
         self._lap("track", clock)
 
         self.mask = mask
+        if T["E9"] and not self.merging:
+            self.others = np.zeros_like(mask)
+            for c in cands:
+                if all(c is not u for u in used) and c.blob is not None:
+                    self.others = cv2.bitwise_or(self.others, c.blob)
         self.hand_mask = np.zeros_like(mask)
         for c in used:
             self.hand_mask = cv2.bitwise_or(self.hand_mask, c.hand_blob if c.hand_blob is not None else c.blob)
@@ -311,7 +330,8 @@ class HandTracker:
             chosen = sorted(chosen, key=lambda c: c.center[0])
         states, prev = [], {}
         for i, c in enumerate(chosen):
-            pos = (c.center[0] * inv, c.center[1] * inv)
+            at = c.point or c.center
+            pos = (at[0] * inv, at[1] * inv)
             last = self.prev.get(i)
             vel = ((pos[0] - last[0]) / dt, (pos[1] - last[1]) / dt) if last else (0.0, 0.0)
             prev[i] = pos
@@ -321,12 +341,12 @@ class HandTracker:
         self.prev = prev
         return states, chosen
 
-    def _track(self, cands, t, inv):
+    def _track(self, cands, t, dt, inv):
         tc = self.tc
-        centers = [(c.center[0] * inv, c.center[1] * inv) for c in cands]
+        centers = [((c.point or c.center)[0] * inv, (c.point or c.center)[1] * inv) for c in cands]
         cost = [[float(np.hypot(tr.pred[0] - x, tr.pred[1] - y)) for x, y in centers] for tr in self.tracks]
         gates = [tc["gate"] * (1 + 0.5 * tr.missed) for tr in self.tracks]
-        pairs = assign(cost, gates)
+        pairs = self._drop_spikes(assign(cost, gates), cost, centers, t, dt)
         matched_t = {i for i, _ in pairs}
         matched_c = {j for _, j in pairs}
         for i, j in pairs:
@@ -335,10 +355,13 @@ class HandTracker:
             tr.update(centers[j], t, self._paddle(c, inv), c.fingers, c.conf, self._scaled(c.contour, inv))
             if c.area <= tc["merge_growth"] * (tr.area or c.area):
                 tr.area = c.area
+                tr.blob = c.blob
+            elif tr.blob is not None:
+                tr.blob = self._propagate(tr, c.blob, dt)
         s = self.v["scale"]
         merged_blobs = [cands[j].blob for _, j in pairs]
         for i, tr in enumerate(self.tracks):
-            if i in matched_t:
+            if i in matched_t or i in self.skipped:
                 continue
             x, y = int(tr.pred[0] * s), int(tr.pred[1] * s)
             inside = any(0 <= y < b.shape[0] and 0 <= x < b.shape[1] and b[y, x] for b in merged_blobs)
@@ -369,6 +392,53 @@ class HandTracker:
                   for tr in self.tracks if tr.confirmed]
         return states, used
 
+    def _grown_from(self, cand):
+        if not self.tracks:
+            return None
+        s = self.v["scale"]
+        for tr in self.tracks:
+            if not tr.area or cand.area <= self.tc["merge_growth"] * tr.area:
+                continue
+            px, py = int(tr.pred[0] * s), int(tr.pred[1] * s)
+            r = max(3, int(0.25 * np.sqrt(tr.area)))
+            if cand.blob[max(0, py - r):py + r + 1, max(0, px - r):px + r + 1].any():
+                return tr
+        return None
+
+    def _propagate(self, tr, blob, dt):
+        s = self.v["scale"]
+        if tr.blob is None or tr.blob.shape != blob.shape:
+            near = np.zeros_like(blob)
+            cv2.circle(near, (int(tr.pred[0] * s), int(tr.pred[1] * s)), max(10, int(0.5 * np.sqrt(tr.area))), 255, -1)
+            return cv2.bitwise_and(blob, near)
+        vx, vy = tr.kalman.velocity * dt * s
+        moved = cv2.warpAffine(tr.blob, np.float32([[1, 0, vx], [0, 1, vy]]), (blob.shape[1], blob.shape[0]))
+        moved = cv2.dilate(moved, segmentation.ellipse(max(5, int(0.15 * np.sqrt(tr.area))) | 1))
+        part = cv2.bitwise_and(blob, moved)
+        if self.others is not None and self.others.shape == part.shape:
+            part = cv2.bitwise_and(part, cv2.bitwise_not(self.others))
+        self.merging = True
+        return part if part.any() else blob
+
+    def _drop_spikes(self, pairs, cost, centers, t, dt):
+        tc = self.tc
+        kept = []
+        for i, j in pairs:
+            tr = self.tracks[i]
+            limit = tc["spike_px"] + tc["spike_speed"] * float(np.hypot(*tr.kalman.velocity)) * dt
+            if not tr.confirmed or cost[i][j] <= limit:
+                tr.pending = None
+                kept.append((i, j))
+            elif tr.pending is not None and np.hypot(tr.pending[0] - centers[j][0],
+                                                     tr.pending[1] - centers[j][1]) <= tc["spike_px"]:
+                tr.pending = None
+                kept.append((i, j))
+            else:
+                tr.pending = centers[j]
+                tr.skip(t)
+                self.skipped.add(i)
+        return kept
+
     def _distractors(self, model, shape):
         maps = [m for m in ((model.distractors if model is not None else None), self.learned) if m is not None]
         if not maps or maps[0].shape != shape:
@@ -396,14 +466,17 @@ class HandTracker:
     def _escape_static(self, cands, pairs, matched_c, t, inv):
         tc = self.tc
         moving = [j for j, c in enumerate(cands) if j not in matched_c and c.motion >= tc["moving_motion"]]
+        busiest = max((cands[m].motion for m in moving), default=0.0)
         for i, j in list(pairs):
             tr, c = self.tracks[i], cands[j]
-            tr.static = tr.static + 1 if c.motion < tc["static_motion"] else 0
+            stuck = c.motion < tc["static_motion"] or c.motion < tc["static_ratio"] * busiest
+            tr.static = tr.static + 1 if stuck else max(0, tr.static - 2)
             if not tr.confirmed or tr.static < tc["static_frames"] or not moving:
                 continue
             k = max(moving, key=lambda m: cands[m].score)
             moving.remove(k)
-            new = Track(self.next_id, (cands[k].center[0] * inv, cands[k].center[1] * inv), t, tc)
+            at = cands[k].point or cands[k].center
+            new = Track(self.next_id, (at[0] * inv, at[1] * inv), t, tc)
             self.next_id += 1
             new.confirmed = True
             new.radius = self._paddle(cands[k], inv)

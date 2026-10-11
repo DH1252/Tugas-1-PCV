@@ -58,6 +58,14 @@ class Kalman:
     def damp(self, factor):
         self.kf.statePost[2:] *= factor
 
+    def clamp(self, w, h):
+        x, y = self.kf.statePost[:2, 0]
+        cx, cy = min(max(x, 0.0), w - 1.0), min(max(y, 0.0), h - 1.0)
+        if (cx, cy) != (x, y):
+            self.kf.statePost[0, 0], self.kf.statePost[1, 0] = cx, cy
+            self.kf.statePost[2:] = 0
+        return np.array([cx, cy])
+
     def correct(self, pos):
         self.kf.correct(np.array([[pos[0]], [pos[1]]], np.float32))
 
@@ -84,6 +92,8 @@ class Track:
         self.merged = 0
         self.static = 0
         self.area = 0.0
+        self.pending = None
+        self.blob = None
         self.confirmed = tc["birth"] <= 1
         self.radius = None
         self.votes = deque(maxlen=tc["finger_vote"])
@@ -110,8 +120,12 @@ class Track:
         self.conf = conf
         self.contour = contour
 
+    def skip(self, t):
+        self.out = self.euro(self.pred, t)
+
     def miss(self, t):
         self.missed += 1
+        self.kalman.damp(self.tc["coast_damping"])
         self.out = self.euro(self.pred, t)
         self.conf *= 0.7
 

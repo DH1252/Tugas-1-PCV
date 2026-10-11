@@ -64,6 +64,8 @@ vision:
   motion_thresh: 40
   score_weights: {size: 1.0, motion: 0.5, proximity: 1.0}
   palm_top_bias: 0.15
+  cursor_anchor: top
+  top_band: 0.2
   core_min_share: 0.3
   arm_cut: 3.0
   wrist_cut: 1.3
@@ -74,11 +76,15 @@ vision:
 tracking:
   gate: 100
   max_coast: 5
+  coast_damping: 0.5
   max_merge: 60
   static_frames: 20
-  learn_static_frames: 90
+  learn_static_frames: 45
   merge_growth: 1.4
+  spike_px: 60
+  spike_speed: 0.5
   static_motion: 0.25
+  static_ratio: 0.5
   moving_motion: 0.4
   birth: 3
   accel_noise: 2000
@@ -88,7 +94,7 @@ tracking:
   adapt_alpha: 0.03
   adapt_every: 10
   adapt_conf: 0.7
-  paddle_scale: 2.0
+  paddle_scale: 1.3
   paddle_min: 30
   paddle_max: 90
   baseline_paddle: 50
@@ -125,6 +131,7 @@ game:
   pause_dwell: 1.0
   auto_pause: 1.5
   max_extrapolate: 0.05
+  cursor_margin: [0.1, 0.1]
   calib_manual: true
   calib_countdown: 3.0
   practice_seconds: 120

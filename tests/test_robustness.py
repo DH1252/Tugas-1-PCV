@@ -33,19 +33,24 @@ def tracker(cfg, distractor=None):
 
 
 @pytest.mark.parametrize("light,speed,exposure", [(0.5, 0.3, 1 / 60), (0.0, 1.6, 1 / 30), (0.5, 1.6, 1 / 60)])
-def test_keeps_glove_through_light_and_blur(cfg, light, speed, exposure):
-    lost, ids = stress.run(tracker(cfg), frames=150, light=light, speed=speed, exposure=exposure)
+def test_keeps_glove_through_light_and_blur(cfg_top, light, speed, exposure):
+    lost, ids = stress.run(tracker(cfg_top), frames=150, anchor="top", light=light, speed=speed, exposure=exposure)
     assert lost < 0.08 and ids == 1
 
 
-def test_ignores_distractor_seen_at_calibration(cfg):
-    tr = tracker(cfg, DISTRACTOR)
+def test_ignores_distractor_seen_at_calibration(cfg_top):
+    tr = tracker(cfg_top, DISTRACTOR)
     assert tr.model.distractors is not None
-    lost, ids = stress.run(tr, frames=150, light=0.3, distractor=DISTRACTOR)
+    lost, ids = stress.run(tr, frames=150, anchor="top", light=0.3, distractor=DISTRACTOR)
     assert lost < 0.05 and ids == 1
 
 
-def test_recovers_from_distractor_added_later(cfg):
-    tr = tracker(cfg)
-    lost, ids = stress.run(tr, frames=150, light=0.3, distractor=DISTRACTOR)
+def test_recovers_from_distractor_added_later(cfg_top):
+    tr = tracker(cfg_top)
+    lost, ids = stress.run(tr, frames=150, anchor="top", light=0.3, distractor=DISTRACTOR)
     assert lost < 0.08
+
+
+def test_palm_anchor_still_robust(cfg):
+    lost, ids = stress.run(tracker(cfg), frames=150, light=0.5, speed=1.6, exposure=1 / 60)
+    assert lost < 0.08 and ids == 1

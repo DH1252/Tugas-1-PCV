@@ -14,6 +14,20 @@ def palm_center(dist, blob, bbox, top_bias, near=None, spread=None):
     return (x + px, y + py), float(dist[y + py, x + px])
 
 
+def top_point(blob, bbox, band, skip=0.005):
+    x, y, w, h = bbox
+    sub = blob[y:y + h, x:x + w] > 0
+    counts = sub.sum(axis=1)
+    total = counts.sum()
+    if total == 0:
+        return None
+    top = int(np.searchsorted(np.cumsum(counts), skip * total))
+    ys, xs = np.nonzero(sub[top:top + max(1, int(band))])
+    if len(xs) == 0:
+        return None
+    return float(x + xs.mean()), float(y + top + ys.mean())
+
+
 def hand_region(mask, center, r, arm_cut, wrist_cut):
     region = np.zeros_like(mask)
     cv2.circle(region, (int(center[0]), int(center[1])), int(arm_cut * r), 255, -1)

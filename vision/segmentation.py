@@ -80,6 +80,7 @@ class Candidate:
     solidity: float
     bbox: tuple
     center: tuple
+    point: tuple = None
     blob: np.ndarray = None
     hand_blob: np.ndarray = None
     radius: float = 0.0
@@ -129,7 +130,8 @@ def score_candidates(cands, prob, motion, predictions, gate, weights):
         c.mean_prob = cv2.mean(prob, mask=blob)[0] / 255.0
         c.motion = cv2.mean(motion, mask=blob)[0] / 255.0 if motion is not None else 0.0
         if predictions:
-            d = min(np.hypot(c.center[0] - p[0], c.center[1] - p[1]) for p in predictions)
+            at = c.point or c.center
+            d = min(np.hypot(at[0] - p[0], at[1] - p[1]) for p in predictions)
             c.proximity = float(np.exp(-(d / gate) ** 2))
         c.score = (weights["size"] * c.area / largest + weights["motion"] * c.motion
                    + weights["proximity"] * c.proximity)

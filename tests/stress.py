@@ -53,10 +53,15 @@ def calibrate(tracker, cfg, color=GLOVE, n=None):
     tracker.finish_calibration(SIZE)
 
 
-def run(tracker, frames=300, radius=50, **kw):
+TOP_OFFSET = 100
+
+
+def run(tracker, frames=300, radius=50, anchor="palm", **kw):
     lost, ids, prev = 0, set(), None
     for i in range(frames):
         frame, (x, y) = stress_frame(i, **kw)
+        if anchor == "top":
+            y -= TOP_OFFSET
         states = tracker.process(frame, i / FPS)
         near = [s for s in states if np.hypot(s.palm[0] - x, s.palm[1] - y) < radius]
         if not near:
@@ -64,3 +69,36 @@ def run(tracker, frames=300, radius=50, **kw):
         else:
             ids.add(near[0].id)
     return lost / frames, len(ids)
+
+
+def edge_truth(i, fps=FPS):
+    t = i / fps
+    return (427 + 440 * np.sin(2 * np.pi * t / 4.0), 250 + 220 * np.sin(2 * np.pi * t / 2.3))
+
+
+def edge_frame(i, color=GLOVE, background=(105, 95, 85)):
+    w, h = SIZE
+    img = np.empty((h, w, 3), np.uint8)
+    img[:] = background
+    x, y = edge_truth(i)
+    draw_hand(img, (x, y), color=color)
+    img = cv2.add(img.astype(np.int16), _noise(img.shape, 4, i % 8), dtype=cv2.CV_16S)
+    return np.clip(img, 0, 255).astype(np.uint8), (x, y)
+
+
+def jumpiness(tracker, frames=240):
+    steps, prev, lost = [], None, 0
+    for i in range(frames):
+        frame, truth = edge_frame(i)
+        states = tracker.process(frame, i / FPS)
+        visible = 40 < truth[0] < SIZE[0] - 40 and truth[1] < SIZE[1] - 20
+        if not states:
+            lost += visible
+            prev = None
+            continue
+        point = np.array(states[0].palm)
+        if prev is not None:
+            steps.append(np.hypot(*((point - prev[0]) - (np.array(truth) - prev[1]))))
+        prev = (point, np.array(truth))
+    steps = np.array(steps)
+    return {"p95": float(np.percentile(steps, 95)), "max": float(steps.max()), "lost": lost}

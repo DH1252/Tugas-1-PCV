@@ -130,6 +130,8 @@ class Game:
             self.hands = self.measured
         else:
             self.hands = self._extrapolate(t)
+        if self.state != "CALIBRATE":
+            self.hands = [self._to_screen(h) for h in self.hands]
         self.paddles = self._paddles()
         getattr(self, HANDLERS[self.state])(dt)
         self.prev_pos = {h.id: np.array(h.palm, float) for h in self.hands}
@@ -151,6 +153,17 @@ class Game:
             vx, vy = h.velocity
             out.append(replace(h, palm=(h.palm[0] + vx * ahead, h.palm[1] + vy * ahead)))
         return out
+
+    def _to_screen(self, h):
+        mx, my = self.g["cursor_margin"]
+        w, ht = self.size
+        gx, gy = 1 / (1 - 2 * mx), 1 / (1 - 2 * my)
+        x = float(np.clip((h.palm[0] - mx * w) * gx, 0, w - 1))
+        y = float(np.clip((h.palm[1] - my * ht) * gy, 0, ht - 1))
+        contour = None
+        if h.contour is not None:
+            contour = ((h.contour - np.array([mx * w, my * ht])) * np.array([gx, gy])).astype(np.int32)
+        return replace(h, palm=(x, y), velocity=(h.velocity[0] * gx, h.velocity[1] * gy), contour=contour)
 
     def _tune_info(self):
         t = self.tracker

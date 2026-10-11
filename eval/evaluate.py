@@ -300,10 +300,13 @@ def main(argv=None):
     ap.add_argument("--loo", action="store_true", help="also run leave-one-out variants")
     ap.add_argument("--hands", type=int, choices=(1, 2))
     ap.add_argument("--practice-log", default="practice_log.csv")
+    ap.add_argument("--anchor", choices=("palm", "top"), default="palm",
+                    help="tracked point; labels mark palm centres, so palm is the default")
     ap.add_argument("--config")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
+    cfg["vision"]["cursor_anchor"] = args.anchor
     order = [name for name, _ in variants(args.loo)]
     rows = []
     for meta, video, labels in find_clips(args.clips, args.only):
