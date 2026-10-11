@@ -4,7 +4,7 @@ import time
 import cv2
 
 from game.engine import Game
-from vision.capture import Source
+from vision.capture import Source, list_cameras
 from vision.config import load_config
 
 WINDOW = "Keep It Up"
@@ -39,10 +39,22 @@ def main():
     ap.add_argument("--loop", action="store_true", help="loop the replayed clip")
     ap.add_argument("--debug", action="store_true")
     ap.add_argument("--recalibrate", action="store_true", help="ignore the saved calibration")
+    ap.add_argument("--camera", type=int, help="camera index (see --list-cameras)")
+    ap.add_argument("--list-cameras", action="store_true")
     ap.add_argument("--config")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+    if args.list_cameras:
+        cams = list_cameras(cfg["camera"])
+        for i, w, h in cams:
+            print(f"camera {i}: {w}x{h}")
+        if not cams:
+            print("no cameras found")
+        return
+    if args.camera is not None:
+        cfg["camera"]["index"] = args.camera
+    cameras = None
     src = Source(cfg, args.video)
     game = Game(cfg, hands=args.hands, baseline=args.tracker == "baseline", debug=args.debug,
                 on_calibrated=src.lock_auto if cfg["camera"]["lock_auto"] else None,
@@ -74,6 +86,17 @@ def main():
             trackbars = False
         key = cv2.waitKey(delay)
         key = -1 if key < 0 else key & 0xFF
+        if key == ord("k") and not src.is_file:
+            current = src.cam["index"]
+            if cameras is None:
+                cameras = sorted({current, *(i for i, _, _ in list_cameras(cfg["camera"]))})
+            nxt = cameras[(cameras.index(current) + 1) % len(cameras)]
+            if nxt != current and src.switch(nxt):
+                game.tracker.reset()
+                game._toast(f"camera {nxt} - press c to recalibrate", 3.0)
+            else:
+                game._toast(f"camera {current} (no other camera found)", 2.0)
+            key = -1
         if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
             break
     src.release()

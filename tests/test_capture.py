@@ -11,6 +11,7 @@ class FakeCapture:
     opened = []
 
     def __init__(self, index, api=None):
+        self.index = index
         self.api = api
         self.n = 0
         self.hang = FakeCapture.hang_after
@@ -75,3 +76,25 @@ def test_read_never_blocks_long(fake):
     src.read()
     assert time.perf_counter() - t0 < 1.0
     src.release()
+
+
+def test_switch_camera(fake):
+    src = capture.Source(fake)
+    assert src.switch(1)
+    assert src.cam["index"] == 1 and src.read() is not None
+    assert not src.switch(1)
+    src.release()
+
+
+def test_switch_to_dead_camera_reverts(fake, monkeypatch):
+    src = capture.Source(fake)
+    monkeypatch.setattr(FakeCapture, "isOpened", lambda self: self.index != 5)
+    fake["camera"]["open_timeout"] = 0.5
+    assert not src.switch(5)
+    assert src.cam["index"] == 0 and src.read() is not None
+    src.release()
+
+
+def test_list_cameras(fake, monkeypatch):
+    monkeypatch.setattr(FakeCapture, "isOpened", lambda self: self.index in (0, 2))
+    assert [c[0] for c in capture.list_cameras(fake["camera"], 4)] == [0, 2]

@@ -21,7 +21,11 @@ python main.py --hands 2           # two hands
 python main.py --tracker baseline  # fixed-threshold baseline
 python main.py --debug             # pipeline stages + tuning sliders in a second window
 python main.py --video clip.avi    # replay a recorded clip instead of the webcam
+python main.py --list-cameras      # show available camera indices
+python main.py --camera 1          # use a specific camera (also: camera.index in config.yaml)
 ```
+
+While playing, press `k` to switch to the next camera. Recalibrate (`c`) afterwards.
 
 On first start, the game asks you to fill the yellow box with your palm. Keep your face in
 view, because calibration also learns where your face is so it can ignore it. Then check that
@@ -55,6 +59,7 @@ Calibration tips:
 | `c` | Recalibrate |
 | `b` | Switch baseline ↔ enhanced |
 | `h` | Switch one ↔ two hands |
+| `k` | Next camera |
 | `1`–`9` | Toggle enhancement E1–E9 |
 | `d` | Debug window |
 | `q` / `Esc` | Quit |
@@ -83,7 +88,7 @@ contour(s), centroid.
 ## Evaluate
 
 ```bash
-python -m eval.record C3_warm --seconds 25        # fill the box, move, hold still when told
+python -m eval.record C3_warm --seconds 25        # fill the box, move, hold still when told (--camera N)
 python -m eval.annotate clips/C3_warm.avi          # click palms (A left click, B right click), g = polygon
 python -m eval.evaluate --loo                      # all labelled clips → eval/results/
 ```

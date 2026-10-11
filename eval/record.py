@@ -20,10 +20,13 @@ def main():
     ap.add_argument("--still", type=float, nargs=2, default=(6, 11), metavar=("START", "END"))
     ap.add_argument("--no-still", action="store_true")
     ap.add_argument("--out", default="clips")
+    ap.add_argument("--camera", type=int)
     ap.add_argument("--config")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+    if args.camera is not None:
+        cfg["camera"]["index"] = args.camera
     src = Source(cfg)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
