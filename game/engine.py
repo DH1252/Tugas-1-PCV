@@ -126,8 +126,16 @@ class Game:
         render.paddle_fill(overlay, self.hands)
         render.blend(view, overlay, 0.35)
         self._draw(view)
-        debug_view = render.debug_grid(self.tracker.debug, self.tracker.timings) if self.debug else None
+        debug_view = render.debug_grid(self.tracker.debug, self.tracker.timings, self._tune_info()) if self.debug else None
         return view, debug_view
+
+    def _tune_info(self):
+        t = self.tracker
+        mode = "auto" if t.auto_tune and t.tuned else "manual"
+        manual = f"  (slider: {', '.join(sorted(t.overrides))})" if t.overrides else ""
+        return (f"{mode}: threshold {t.param('backproject_thresh')}/{t.param('backproject_low')}  "
+                f"S>={t.param('s_min')} V>={t.param('v_min')}  open {t.param('open_kernel')} "
+                f"close {t.param('close_kernel')}{manual}")
 
     def _paddles(self):
         out = []

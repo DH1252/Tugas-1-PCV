@@ -21,6 +21,17 @@ def back_project(hsv, hist, blur):
     return prob
 
 
+def hysteresis(prob, low, high):
+    weak = (prob >= low).astype(np.uint8)
+    n, labels = cv2.connectedComponents(weak, connectivity=8)
+    if n <= 1:
+        return weak * 255
+    keep = np.zeros(n, bool)
+    keep[np.unique(labels[prob >= high])] = True
+    keep[0] = False
+    return (keep[labels] * 255).astype(np.uint8)
+
+
 def ellipse(k):
     k = max(1, int(k))
     return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))

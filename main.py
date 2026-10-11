@@ -14,6 +14,7 @@ WINDOW = "Keep It Up"
 DEBUG_WINDOW = "Debug"
 TRACKBARS = (
     ("threshold", "backproject_thresh", 255, False),
+    ("low threshold", "backproject_low", 255, False),
     ("S min", "s_min", 255, False),
     ("V min", "v_min", 255, False),
     ("V max", "v_max", 255, False),
@@ -22,16 +23,29 @@ TRACKBARS = (
 )
 
 
-def make_trackbars(cfg):
+def make_trackbars(tracker):
     cv2.namedWindow(DEBUG_WINDOW, cv2.WINDOW_NORMAL)
     for name, key, top, _ in TRACKBARS:
-        cv2.createTrackbar(name, DEBUG_WINDOW, int(cfg["vision"][key]), top, lambda _: None)
+        cv2.createTrackbar(name, DEBUG_WINDOW, int(tracker.param(key)), top, lambda _: None)
+    return sync_trackbars(tracker)
 
 
-def read_trackbars(cfg):
+def sync_trackbars(tracker):
+    shown = {}
+    for name, key, _, _ in TRACKBARS:
+        shown[key] = int(tracker.param(key))
+        cv2.setTrackbarPos(name, DEBUG_WINDOW, shown[key])
+    return shown
+
+
+def read_trackbars(tracker, shown):
     for name, key, _, odd in TRACKBARS:
         value = cv2.getTrackbarPos(name, DEBUG_WINDOW)
-        cfg["vision"][key] = max(1, value | 1) if odd else value
+        if odd:
+            value = max(1, value | 1)
+        if value != shown[key]:
+            tracker.override(key, value)
+            shown[key] = value
 
 
 def main():
@@ -81,9 +95,13 @@ def main():
         cv2.imshow(WINDOW, view)
         if debug_view is not None:
             if not trackbars:
-                make_trackbars(cfg)
+                shown = make_trackbars(game.tracker)
+                synced = game.tracker.tune_version
                 trackbars = True
-            read_trackbars(cfg)
+            elif synced != game.tracker.tune_version:
+                shown = sync_trackbars(game.tracker)
+                synced = game.tracker.tune_version
+            read_trackbars(game.tracker, shown)
             cv2.imshow(DEBUG_WINDOW, debug_view)
         elif trackbars:
             cv2.destroyWindow(DEBUG_WINDOW)

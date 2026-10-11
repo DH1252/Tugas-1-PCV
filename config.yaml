@@ -37,6 +37,11 @@ vision:
   min_hand_bin: 0.02
   backproject_blur: 5
   backproject_thresh: 90
+  backproject_low: 40
+  auto_tune: true
+  tune_fpr_high: 0.002
+  tune_fpr_low: 0.02
+  grow_passes: 2
   ycrcb_default_lo: [0, 133, 77]
   ycrcb_default_hi: [255, 173, 127]
   ycrcb_margin: 8

@@ -32,6 +32,17 @@ capture its colour. To sample a different area, drag a new box with the mouse fi
 it. Keep your face in view, because calibration also learns where your face is so it can ignore
 it. Then check that your hand shows green and the background stays dark.
 
+Calibration also auto-tunes the main parameters from what it sees:
+- the back-projection thresholds, picked from how hand and background pixels score
+- the S/V gate, lowered if your hand has dim or pale areas
+- the opening/closing kernels, sized to the sample box
+
+It also grows the colour model from the palm patch out to the whole connected hand, so shaded
+fingers and edges are learned too, instead of showing up as separate islands. The mask uses
+two thresholds (hysteresis): weaker pixels are kept only if they touch strongly matching ones.
+The debug window (`--debug`) shows the tuned values. Moving a slider overrides that value until
+you recalibrate. Set `vision.auto_tune: false` to use the `config.yaml` values instead.
+
 Coloured gloves work too: calibration learns whatever colour is in the box and centres its
 hue, so a green, blue or red glove is tracked like skin, and a glove that differs from your skin
 and the room is often easier to track. Grey, black or white gloves can't be tracked, since they

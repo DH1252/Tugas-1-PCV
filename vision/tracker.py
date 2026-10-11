@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 
 from . import hand, segmentation
-from .calibration import CalibrationError, build_model, hs_hist
+from .calibration import CalibrationError, build_model, hs_hist, tune_gate, tune_kernels
 from .face import FaceTracker
 from .filters import Track, assign
 from .preprocess import WhiteBalance, centre_shift, hue_lut, reliability_gate, rotate_hue, shift_box
@@ -53,6 +53,9 @@ class HandTracker:
         self.calib_roi = None
         self.model = None
         self.adapted = False
+        self.tuned = {}
+        self.overrides = set()
+        self.tune_version = 0
         self.debug_enabled = False
         self.debug = {}
         self.timings = {}
@@ -112,6 +115,7 @@ class HandTracker:
     def finish_calibration(self, size, roi=None):
         s = self.v["scale"]
         self.calib_roi = tuple(int(round(c * s)) for c in (roi or self.calib_box(size)))
+        self.overrides.clear()
         self._build_model()
         self.reset()
 
@@ -131,6 +135,19 @@ class HandTracker:
         self._build_model()
         self.reset()
 
+    @property
+    def auto_tune(self):
+        return self.toggles["E3"] and self.v.get("auto_tune", True)
+
+    def param(self, key):
+        if self.auto_tune and key in self.tuned and key not in self.overrides:
+            return self.tuned[key]
+        return self.v[key]
+
+    def override(self, key, value):
+        self.v[key] = value
+        self.overrides.add(key)
+
     def _set_shift(self, shift):
         self.hue_shift = shift
         self.lut = hue_lut(shift)
@@ -140,10 +157,17 @@ class HandTracker:
         if self.toggles["E3"] and self.v.get("auto_hue_shift", True):
             shift = centre_shift(self.calib_frames, self.calib_roi, self.v["s_min"], self.v["v_min"])
         self._set_shift(self.v["hue_shift"] if shift is None else shift)
+        self.tuned = {}
+        if self.auto_tune:
+            self.tuned.update(tune_gate(self.calib_frames, self.calib_roi, self.v))
+            self.tuned.update(tune_kernels(self.calib_roi))
         wb = WhiteBalance(self.v["wb_clip"], self.v["wb_smooth"])
         samples = [self._prepare(f, wb) for f in self.calib_frames]
         self.model = None
-        self.model = build_model(samples, self.calib_roi, self.cfg)
+        self.model = build_model(samples, self.calib_roi, self.cfg,
+                                 {**self.v, **self.tuned} if self.auto_tune else None)
+        self.tuned.update(self.model.tuned)
+        self.tune_version += 1
         self.adapted = False
 
     def _small(self, frame):
@@ -161,7 +185,7 @@ class HandTracker:
         gate = None
         if self.toggles["E2"]:
             hsv = rotate_hue(hsv, self.lut)
-            gate = reliability_gate(hsv, self.v["s_min"], self.v["v_min"], self.v["v_max"])
+            gate = reliability_gate(hsv, self.param("s_min"), self.param("v_min"), self.v["v_max"])
         ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
         return {"bgr": bgr, "hsv": hsv, "gate": gate, "ycrcb": ycrcb}
 
@@ -201,7 +225,7 @@ class HandTracker:
         model = self.model if T["E3"] else None
         if model is not None and T["E4"]:
             prob = segmentation.back_project(hsv, model.ratio, v["backproject_blur"])
-            mask = cv2.threshold(prob, v["backproject_thresh"], 255, cv2.THRESH_BINARY)[1]
+            mask = segmentation.hysteresis(prob, self.param("backproject_low"), self.param("backproject_thresh"))
         else:
             lo, hi = (model.lo, model.hi) if model is not None else self._fixed_box()
             mask = segmentation.hsv_box(hsv, lo, hi)
@@ -219,7 +243,7 @@ class HandTracker:
         self._lap("segment", clock)
 
         if T["E6"]:
-            light, mask = segmentation.denoise(mask, v["open_kernel"], v["close_kernel"])
+            light, mask = segmentation.denoise(mask, self.param("open_kernel"), self.param("close_kernel"))
         else:
             mask = segmentation.baseline_morph(mask)
             light = mask

@@ -1,9 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
 
-from .segmentation import denoise, hsv_box
+from .segmentation import back_project, denoise, ellipse, hsv_box, hysteresis
 
 
 class CalibrationError(Exception):
@@ -37,6 +37,7 @@ class ColorModel:
     face_box: tuple | None
     min_bin: float
     ratio: np.ndarray = None
+    tuned: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.refresh()
@@ -63,7 +64,69 @@ def core_mask(hsv, mask, bins, mass):
     return cv2.bitwise_and(core, mask)
 
 
-def build_model(samples, roi, cfg):
+def tune_gate(frames, roi, v):
+    x, y, w, h = roi
+    hsv = np.concatenate([cv2.cvtColor(f[y:y + h, x:x + w], cv2.COLOR_BGR2HSV).reshape(-1, 3) for f in frames])
+    s_min = int(np.clip(0.5 * np.percentile(hsv[:, 1], 5), 10, v["s_min"]))
+    v_min = int(np.clip(0.5 * np.percentile(hsv[:, 2], 5), 15, v["v_min"]))
+    return {"s_min": s_min, "v_min": v_min}
+
+
+def tune_kernels(roi):
+    size = min(roi[2], roi[3])
+    return {"open_kernel": int(np.clip(round(size * 0.1), 3, 7)) | 1,
+            "close_kernel": int(np.clip(round(size * 0.35), 5, 21)) | 1}
+
+
+def tune_thresholds(model, samples, hand_masks, bg_masks, v):
+    hand, bg = [], []
+    for s, hm, bm in zip(samples, hand_masks, bg_masks):
+        prob = back_project(s["hsv"], model.ratio, v["backproject_blur"])
+        hand.append(prob[hm > 0])
+        bg.append(prob[bm > 0])
+    hand, bg = np.concatenate(hand), np.concatenate(bg)
+    if len(hand) == 0:
+        return {}
+    tpr = np.cumsum(np.bincount(hand, minlength=256)[::-1])[::-1] / len(hand)
+    fpr = np.cumsum(np.bincount(bg, minlength=256)[::-1])[::-1] / max(len(bg), 1)
+    ok = np.flatnonzero(fpr <= v["tune_fpr_high"])
+    high = int(ok[0]) if len(ok) else int(np.argmax(tpr - fpr))
+    keeps = np.flatnonzero(tpr >= 0.6)
+    if len(keeps):
+        high = min(high, int(keeps[-1]))
+    high = int(np.clip(high, 40, 220))
+    ok = np.flatnonzero(fpr <= v["tune_fpr_low"])
+    low = int(ok[0]) if len(ok) else high
+    keeps = np.flatnonzero(tpr >= 0.95)
+    if len(keeps):
+        low = min(low, int(keeps[-1]))
+    low = int(np.clip(low, 10, high))
+    return {"backproject_thresh": high, "backproject_low": low}
+
+
+def grow_hand(model, samples, roi, avoid, tuned, v):
+    shape = samples[0]["hsv"].shape[:2]
+    x, y, w, h = roi
+    window = np.zeros(shape, np.uint8)
+    window[max(0, y - 3 * h):y + 4 * h, max(0, x - 3 * w):x + 4 * w] = 255
+    window = cv2.bitwise_and(window, cv2.bitwise_not(avoid))
+    regions = []
+    for s in samples:
+        prob = back_project(s["hsv"], model.ratio, v["backproject_blur"])
+        if s["gate"] is not None:
+            prob = cv2.bitwise_and(prob, s["gate"])
+        m = hysteresis(prob, tuned["backproject_low"], tuned["backproject_thresh"])
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, ellipse(tuned["close_kernel"]))
+        n, labels = cv2.connectedComponents(m)
+        ids = np.unique(labels[y:y + h, x:x + w])
+        region = (np.isin(labels, ids[ids > 0]) * 255).astype(np.uint8)
+        region = cv2.bitwise_and(region, window)
+        region = cv2.bitwise_and(region, ((prob >= tuned["backproject_low"]) * 255).astype(np.uint8))
+        regions.append(region)
+    return regions
+
+
+def build_model(samples, roi, cfg, tuned=None):
     v = cfg["vision"]
     bins = (v["h_bins"], v["s_bins"])
     shape = samples[0]["hsv"].shape[:2]
@@ -72,10 +135,11 @@ def build_model(samples, roi, cfg):
     roi_mask[y:y + h, x:x + w] = 255
 
     hand_hist = np.zeros(bins, np.float32)
-    hsv_px, crcb_px = [], []
+    hsv_px, crcb_px, cores = [], [], []
     for s in samples:
         m = roi_mask if s["gate"] is None else cv2.bitwise_and(roi_mask, s["gate"])
         m = core_mask(s["hsv"], m, bins, v["calib_core_mass"])
+        cores.append(m)
         hand_hist += hs_hist(s["hsv"], m, bins)
         hsv_px.append(s["hsv"][m > 0])
         crcb_px.append(s["ycrcb"][m > 0][:, 1:])
@@ -112,16 +176,38 @@ def build_model(samples, roi, cfg):
         if area >= best and centroids[i][1] < 0.75 * shape[0]:
             face_i, best = i, area
     face_box = None
+    face = np.zeros(shape, np.uint8)
     if face_i is not None:
         exclude[labels == face_i] = 255
+        face[labels == face_i] = 255
         face_box = tuple(int(s) for s in stats[face_i, :4])
     exclude = cv2.dilate(exclude, np.ones((9, 9), np.uint8))
 
     bg_hist = np.zeros(bins, np.float32)
     keep = cv2.bitwise_not(exclude)
+    bgs = []
     for s in samples:
         m = keep if s["gate"] is None else cv2.bitwise_and(keep, s["gate"])
+        bgs.append(m)
         bg_hist += hs_hist(s["hsv"], m, bins)
 
-    return ColorModel(normalize(hand_hist), normalize(bg_hist), tuple(lo), tuple(hi),
-                      tuple(crcb_lo), tuple(crcb_hi), face_box, v["min_hand_bin"])
+    model = ColorModel(normalize(hand_hist), normalize(bg_hist), tuple(lo), tuple(hi),
+                       tuple(crcb_lo), tuple(crcb_hi), face_box, v["min_hand_bin"])
+    if tuned is None:
+        return model
+
+    tuned = dict(tuned)
+    tuned.update(tune_thresholds(model, samples, cores, bgs, v))
+    avoid = cv2.dilate(face, ellipse(15))
+    for _ in range(v["grow_passes"]):
+        regions = grow_hand(model, samples, roi, avoid, tuned, v)
+        grown = np.zeros(bins, np.float32)
+        for s, r in zip(samples, regions):
+            grown += hs_hist(s["hsv"], r, bins)
+        if grown.sum() <= 0:
+            break
+        model.hand_p = normalize(hand_hist + grown)
+        model.refresh()
+        tuned.update(tune_thresholds(model, samples, regions, bgs, v))
+    model.tuned = {k: tuned[k] for k in ("backproject_thresh", "backproject_low") if k in tuned}
+    return model

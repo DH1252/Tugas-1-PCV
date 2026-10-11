@@ -124,7 +124,7 @@ def tile(img, size):
     return cv2.resize(img, size, interpolation=cv2.INTER_NEAREST)
 
 
-def debug_grid(views, timings, size=(320, 240), cols=3):
+def debug_grid(views, timings, info="", size=(320, 240), cols=3):
     if not views:
         return None
     tiles = []
@@ -136,6 +136,8 @@ def debug_grid(views, timings, size=(320, 240), cols=3):
         tiles.append(np.zeros((size[1], size[0], 3), np.uint8))
     rows = [np.hstack(tiles[i:i + cols]) for i in range(0, len(tiles), cols)]
     grid = np.vstack(rows)
-    bar = np.zeros((28, grid.shape[1], 3), np.uint8)
+    bar = np.zeros((52 if info else 28, grid.shape[1], 3), np.uint8)
     text(bar, "  ".join(f"{k} {v:.1f}ms" for k, v in timings.items()), (8, 20), 0.5, WHITE, 1)
+    if info:
+        text(bar, info, (8, 44), 0.5, YELLOW, 1)
     return np.vstack([grid, bar])
