@@ -55,11 +55,13 @@ class HandTracker:
         self.tuned = {}
         self.overrides = set()
         self.learned = None
+        self.v_ratio = 1.0
         self.tune_version = 0
         self.debug_enabled = False
         self.debug = {}
         self.timings = {}
         self.mask = None
+        self.selected = None
         self.hand_mask = None
         self.reset()
 
@@ -141,6 +143,8 @@ class HandTracker:
 
     def param(self, key):
         if self.auto_tune and key in self.tuned and key not in self.overrides:
+            if key == "v_min":
+                return max(15, int(self.tuned[key] * min(1.0, self.v_ratio)))
             return self.tuned[key]
         return self.v[key]
 
@@ -158,6 +162,7 @@ class HandTracker:
             shift = centre_shift(self.calib_frames, self.calib_roi, self.v["s_min"], self.v["v_min"])
         self._set_shift(self.v["hue_shift"] if shift is None else shift)
         self.tuned = {}
+        self.v_ratio = 1.0
         if self.auto_tune:
             self.tuned.update(tune_gate(self.calib_frames, self.calib_roi, self.v))
             self.tuned.update(tune_kernels(self.calib_roi))
@@ -313,10 +318,14 @@ class HandTracker:
             for c in cands:
                 if all(c is not u for u in used) and c.blob is not None:
                     self.others = cv2.bitwise_or(self.others, c.blob)
+        self.selected = np.zeros_like(mask)
+        for c in used:
+            self.selected = cv2.bitwise_or(self.selected, c.blob)
         self.hand_mask = np.zeros_like(mask)
         for c in used:
             self.hand_mask = cv2.bitwise_or(self.hand_mask, c.hand_blob if c.hand_blob is not None else c.blob)
         self._adapt(used, hsv, gate)
+        self._follow_brightness(used, hsv, prob)
         if T["E7"] and T["E9"]:
             self._learn_static(mask, motion, used)
         self._lap("total", [start])
@@ -486,6 +495,19 @@ class HandTracker:
             pairs.remove((i, j))
             pairs.append((i, k))
             matched_c.add(k)
+
+    def _follow_brightness(self, used, hsv, prob):
+        ref = self.tuned.get("v_ref")
+        if not ref or not self.auto_tune:
+            return
+        if used:
+            best = max(used, key=lambda c: c.area)
+            sure = (best.blob > 0) & (prob >= self.param("backproject_thresh"))
+            if np.count_nonzero(sure) > 50:
+                now = float(np.median(hsv[..., 2][sure]))
+                self.v_ratio = 0.8 * self.v_ratio + 0.2 * float(np.clip(now / ref, 0.5, 1.5))
+        elif self.lost > self.tc["relax_after"]:
+            self.v_ratio *= 0.97
 
     def _adapt(self, used, hsv, gate):
         T, tc, v = self.toggles, self.tc, self.v

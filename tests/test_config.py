@@ -19,3 +19,8 @@ def test_apply_resolution(cfg):
     assert (cam["width"], cam["height"]) == (640, 480)
     cam = apply_resolution(cfg, None, "1280x720")["camera"]
     assert (cam["width"], cam["height"]) == (1280, 720)
+
+
+def test_processing_size_stays_constant(cfg):
+    assert apply_resolution(cfg, None, "1280x720")["vision"]["scale"] == round(427 / 1280, 4)
+    assert apply_resolution(cfg, None, "854x480")["vision"]["scale"] == 0.5

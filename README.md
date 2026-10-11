@@ -24,7 +24,7 @@ python main.py --video clip.avi    # replay a recorded clip instead of the webca
 python main.py --list-cameras      # show available camera indices
 python main.py --camera 1          # use a specific camera (also: camera.index in config.yaml)
 python main.py --resolution 1080p  # camera capture size: 480p, 720p, 1080p or WxH (default 1280x720)
-python main.py --frame 1280x720    # tracking/game size (default: 480 high, same aspect as the capture)
+python main.py --frame 1280x720    # game size (default: 480 high, same aspect as the capture); tracking always runs ~427 px wide
 python main.py --camera-fps 30     # if your camera can't do 60 fps (default asks for 60)
 python main.py --fps 60            # game frame rate (default 60)
 ```
@@ -106,6 +106,22 @@ rates (`60 fps  cam 30`). Physics uses [pymunk](https://www.pymunk.org/).
 Items: **ball** (normal), **balloon** (slow and floaty), **heavy** (needs a firm swat),
 **spike** (don't touch it, let it fall), **star** (touch it for a life or points). You lose a
 life when a ball reaches the bottom or when you touch a spike.
+
+### Calibration preview
+
+After capture, the preview shows what the tracker found: **green** is the glove it will
+follow, **red** is anything else in view that has the glove's colour. Red areas are ignored
+when they're small, but they can confuse tracking when your hand passes near them. A monitor
+showing similar colours is the usual culprit, so move or cover them, or use a glove colour
+that isn't elsewhere in view. Keep the glove clear of same-coloured objects while you press
+Space.
+
+Calibration samples an ellipse inside the box, so background in the box corners isn't
+learned. It then grows outward from the palm through every connected pixel of the same hue,
+so the lighter, shinier fingertips and darker creases of a single-colour glove are learned
+too. It also learns a brightness floor relative to the glove (about 40%, which follows the
+glove's brightness while you play), so a dark background with the same hue, like a navy
+window at night, isn't taken for the glove.
 
 ### Cursor
 

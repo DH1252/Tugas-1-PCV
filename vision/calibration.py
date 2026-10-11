@@ -54,7 +54,15 @@ class ColorModel:
         self.refresh()
 
 
-def dominant_bins(hist, level=0.05):
+def sample_mask(shape, roi, shrink):
+    x, y, w, h = roi
+    m = np.zeros(shape, np.uint8)
+    cv2.ellipse(m, (int(x + w / 2), int(y + h / 2)), (max(1, int(w * shrink / 2)), max(1, int(h * shrink / 2))),
+                0, 0, 360, 255, -1)
+    return m
+
+
+def dominant_bins(hist, level=0.15):
     smooth = cv2.GaussianBlur(hist.astype(np.float32), (3, 3), 0)
     if smooth.max() <= 0:
         return np.ones_like(smooth, bool)
@@ -82,14 +90,15 @@ def tune_gate(frames, roi, v):
     hsv = []
     for f in frames:
         patch = cv2.cvtColor(f[y:y + h, x:x + w], cv2.COLOR_BGR2HSV)
-        core = core_mask(patch, np.full(patch.shape[:2], 255, np.uint8), bins, v["calib_core_mass"])
+        inner = sample_mask(patch.shape[:2], (0, 0, w, h), v["sample_shrink"])
+        core = core_mask(patch, inner, bins, v["calib_core_mass"])
         hsv.append(patch[core > 0])
     hsv = np.concatenate(hsv)
     if len(hsv) == 0:
         return {}
     s_min = int(np.clip(0.5 * np.percentile(hsv[:, 1], 5), 10, v["s_min"]))
-    v_min = int(np.clip(0.5 * np.percentile(hsv[:, 2], 5), 15, v["v_min"]))
-    return {"s_min": s_min, "v_min": v_min}
+    v_min = int(np.clip(v["v_floor_ratio"] * np.percentile(hsv[:, 2], 5), 15, v["v_floor_max"]))
+    return {"s_min": s_min, "v_min": v_min, "v_ref": float(np.median(hsv[:, 2]))}
 
 
 def tune_kernels(roi):
@@ -186,6 +195,35 @@ def distractor_map(model, samples, hand_regions, params, v):
     return cv2.dilate(found, ellipse(15))
 
 
+def hand_band(shape, roi):
+    x, y, w, h = roi
+    band = np.zeros(shape, np.uint8)
+    band[max(0, y - h):, max(0, x - w // 4):x + w + w // 4] = 255
+    return band
+
+
+def trim(region, roi, limit):
+    if cv2.countNonZero(region) <= limit:
+        return region
+    return cv2.bitwise_and(region, hand_band(region.shape, roi))
+
+
+def hue_grow(samples, roi_mask, roi, h_lo, h_hi, v):
+    lo = max(0, int(h_lo) - v["grow_hue_margin"])
+    hi = min(179, int(h_hi) + v["grow_hue_margin"])
+    limit = min(v["grow_max_area"] * roi_mask.size, v["grow_hand_ratio"] * cv2.countNonZero(roi_mask))
+    regions = []
+    for s in samples:
+        band = cv2.inRange(s["hsv"], (lo, 0, 0), (hi, 255, 255))
+        if s["gate"] is not None:
+            band = cv2.bitwise_and(band, s["gate"])
+        band = cv2.morphologyEx(band, cv2.MORPH_OPEN, ellipse(3))
+        n, labels = cv2.connectedComponents(band)
+        ids = np.unique(labels[roi_mask > 0])
+        regions.append(trim((np.isin(labels, ids[ids > 0]) * 255).astype(np.uint8), roi, limit))
+    return regions
+
+
 def merge_maps(a, b):
     if a is None or b is None:
         return a if b is None else b
@@ -197,8 +235,7 @@ def build_model(samples, roi, cfg, tuned=None):
     bins = (v["h_bins"], v["s_bins"])
     shape = samples[0]["hsv"].shape[:2]
     x, y, w, h = roi
-    roi_mask = np.zeros(shape, np.uint8)
-    roi_mask[y:y + h, x:x + w] = 255
+    roi_mask = sample_mask(shape, roi, v["sample_shrink"])
 
     hand_hist = np.zeros(bins, np.float32)
     hsv_px, chroma_px, cores = [], [], []
@@ -211,7 +248,7 @@ def build_model(samples, roi, cfg, tuned=None):
         chroma_px.append(s["chroma"][m > 0])
     hsv_px = np.concatenate(hsv_px)
     chroma_px = np.concatenate(chroma_px)
-    if len(hsv_px) < 0.3 * w * h * len(samples):
+    if len(hsv_px) < 0.5 * cv2.countNonZero(roi_mask) * len(samples):
         raise CalibrationError("the box is too grey or dark to track by colour")
 
     p_lo, p_hi = v["percentiles"]
@@ -229,13 +266,24 @@ def build_model(samples, roi, cfg, tuned=None):
     _, skin = denoise(skin, 5, 9)
     n, labels = cv2.connectedComponents(skin)
 
+    glove = None
+    if tuned is not None:
+        glove = hue_grow(samples, roi_mask, roi, lo[0], hi[0], v)
+        if glove is not None:
+            for s, r in zip(samples, glove):
+                hand_hist += hs_hist(s["hsv"], r, bins)
+
     gx, gy = int(0.1 * w), int(0.1 * h)
     exclude = np.zeros(shape, np.uint8)
     exclude[max(0, y - gy):y + h + gy, max(0, x - gx):x + w + gx] = 255
     reach = np.zeros(shape, np.uint8)
     reach[max(0, y - 3 * h):, max(0, x - 2 * w):x + 3 * w] = 255
     touching = np.unique(labels[exclude > 0])
-    exclude[np.isin(labels, touching[touching > 0])] = 255
+    attached = (np.isin(labels, touching[touching > 0]) * 255).astype(np.uint8)
+    limit = min(v["grow_max_area"] * shape[0] * shape[1], v["grow_hand_ratio"] * cv2.countNonZero(roi_mask))
+    exclude = cv2.bitwise_or(exclude, trim(attached, roi, limit))
+    if glove is not None:
+        exclude = cv2.bitwise_or(exclude, glove[-1])
     hand_zone = cv2.dilate(exclude, np.ones((9, 9), np.uint8))
     early = lookalikes(normalize(hand_hist), samples, hand_zone, v)
     exclude = cv2.bitwise_or(hand_zone, reach)

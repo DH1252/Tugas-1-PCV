@@ -138,7 +138,8 @@ class Game:
 
         view = render.dim(frame, 0.45 if self.state in ("MENU", "PAUSE", "GAME_OVER") else 0.6)
         overlay = view.copy()
-        render.paddle_fill(overlay, self.hands)
+        if self.state != "CALIBRATE":
+            render.paddle_fill(overlay, self.hands)
         render.blend(view, overlay, 0.35)
         self._draw(view)
         debug_view = render.debug_grid(self.tracker.debug, self.tracker.timings, self._tune_info()) if self.debug else None
@@ -431,11 +432,21 @@ class Game:
         w, h = self.size
         x, y, bw, bh = self.sample_box
         if self.calib_phase == "review":
+            islands = False
             if self.tracker.mask is not None:
                 mask = cv2.resize(self.tracker.mask, self.size, interpolation=cv2.INTER_NEAREST) > 0
-                img[mask] = (0.5 * img[mask] + np.array([0, 120, 0])).clip(0, 255).astype(np.uint8)
+                hand = np.zeros_like(mask)
+                if self.tracker.selected is not None:
+                    hand = cv2.resize(self.tracker.selected, self.size, interpolation=cv2.INTER_NEAREST) > 0
+                other = mask & ~hand
+                islands = other.sum() > 0.002 * other.size
+                img[hand] = (0.5 * img[hand] + np.array([0, 120, 0])).clip(0, 255).astype(np.uint8)
+                img[other] = (0.5 * img[other] + np.array([0, 0, 140])).clip(0, 255).astype(np.uint8)
             render.text(img, "Your hand or glove should be green, the rest dark", (w // 2, 40), 0.65, center=True)
             render.text(img, "Hover OK / Retry, or press Enter / r", (w // 2, 70), 0.55, render.GREY, 1, center=True)
+            if islands:
+                render.text(img, "Red = other things with the glove's colour. Move or cover them, or use another glove colour.",
+                            (w // 2, 98), 0.5, render.RED, 1, center=True)
             for b in self.review_menu.buttons:
                 render.draw_button(img, b)
             return

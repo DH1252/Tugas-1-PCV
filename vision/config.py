@@ -36,6 +36,9 @@ def apply_resolution(cfg, capture=None, frame=None):
         cw, ch = cam["capture_width"], cam["capture_height"]
         h = min(cam["height"], ch)
         cam["width"], cam["height"] = int(round(h * cw / ch)), h
+    width = cfg["vision"].get("process_width")
+    if width:
+        cfg["vision"]["scale"] = round(min(1.0, width / cam["width"]), 4)
     return cfg
 
 

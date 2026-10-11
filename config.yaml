@@ -19,6 +19,7 @@ display:
 
 vision:
   scale: 0.5
+  process_width: 427
   blur: 5
   wb_clip: [0.7, 1.4]
   wb_smooth: 0.1
@@ -26,12 +27,15 @@ vision:
   auto_hue_shift: true
   s_min: 30
   v_min: 40
+  v_floor_ratio: 0.4
+  v_floor_max: 110
   v_max: 250
   baseline_lo: [0, 48, 80]
   baseline_hi: [20, 255, 255]
   calib_box: [0.66, 0.40, 0.10, 0.15]
   calib_frames: 40
   calib_core_mass: 0.9
+  sample_shrink: 0.8
   h_bins: 30
   s_bins: 32
   percentiles: [2, 98]
@@ -51,6 +55,8 @@ vision:
   tune_low_min: 25
   grow_max_area: 0.2
   grow_thresh: [40, 10]
+  grow_hue_margin: 6
+  grow_hand_ratio: 12
   grow_passes: 2
   chroma_default_lo: [92, 71]
   chroma_default_hi: [120, 92]
@@ -77,6 +83,7 @@ tracking:
   gate: 100
   max_coast: 5
   coast_damping: 0.5
+  relax_after: 15
   max_merge: 60
   static_frames: 20
   learn_static_frames: 45

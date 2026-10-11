@@ -54,3 +54,12 @@ def test_recovers_from_distractor_added_later(cfg_top):
 def test_palm_anchor_still_robust(cfg):
     lost, ids = stress.run(tracker(cfg), frames=150, light=0.5, speed=1.6, exposure=1 / 60)
     assert lost < 0.08 and ids == 1
+
+
+@pytest.mark.parametrize("fade", [0.55, 0.8])
+def test_glossy_glove_is_one_piece(cfg, fade):
+    from . import glossy
+    tr = HandTracker(cfg)
+    glossy.calibrate(tr, cfg, fade=fade)
+    covered, false = glossy.coverage(tr, frames=8, fade=fade)
+    assert covered > 0.9 and false < 0.05
