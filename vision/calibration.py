@@ -32,11 +32,14 @@ class ColorModel:
     bg_p: np.ndarray
     lo: tuple
     hi: tuple
-    crcb_lo: tuple
-    crcb_hi: tuple
+    chroma_lo: tuple
+    chroma_hi: tuple
     min_bin: float
     ratio: np.ndarray = None
     tuned: dict = field(default_factory=dict)
+    distractors: np.ndarray = None
+    core_lo: tuple = None
+    core_hi: tuple = None
 
     def __post_init__(self):
         self.refresh()
@@ -51,21 +54,39 @@ class ColorModel:
         self.refresh()
 
 
+def dominant_bins(hist, level=0.05):
+    smooth = cv2.GaussianBlur(hist.astype(np.float32), (3, 3), 0)
+    if smooth.max() <= 0:
+        return np.ones_like(smooth, bool)
+    peak = np.unravel_index(np.argmax(smooth), smooth.shape)
+    n, labels = cv2.connectedComponents((smooth >= level * smooth.max()).astype(np.uint8), connectivity=8)
+    return labels == labels[peak]
+
+
 def core_mask(hsv, mask, bins, mass):
     hist = hs_hist(hsv, mask, bins)
-    flat = np.sort(hist.ravel())[::-1]
-    cum = np.cumsum(flat)
-    if cum[-1] <= 0:
+    if hist.sum() <= 0:
         return mask
+    keep = dominant_bins(hist)
+    flat = np.sort(hist[keep])[::-1]
+    cum = np.cumsum(flat)
     cut = flat[min(np.searchsorted(cum, mass * cum[-1]), len(flat) - 1)]
-    keep = (hist >= max(cut, 1)).astype(np.float32) * 255
+    keep = (keep & (hist >= max(cut, 1))).astype(np.float32) * 255
     core = cv2.calcBackProject([hsv], [0, 1], keep, [0, 180, 0, 256], 1)
     return cv2.bitwise_and(core, mask)
 
 
 def tune_gate(frames, roi, v):
     x, y, w, h = roi
-    hsv = np.concatenate([cv2.cvtColor(f[y:y + h, x:x + w], cv2.COLOR_BGR2HSV).reshape(-1, 3) for f in frames])
+    bins = (v["h_bins"], v["s_bins"])
+    hsv = []
+    for f in frames:
+        patch = cv2.cvtColor(f[y:y + h, x:x + w], cv2.COLOR_BGR2HSV)
+        core = core_mask(patch, np.full(patch.shape[:2], 255, np.uint8), bins, v["calib_core_mass"])
+        hsv.append(patch[core > 0])
+    hsv = np.concatenate(hsv)
+    if len(hsv) == 0:
+        return {}
     s_min = int(np.clip(0.5 * np.percentile(hsv[:, 1], 5), 10, v["s_min"]))
     v_min = int(np.clip(0.5 * np.percentile(hsv[:, 2], 5), 15, v["v_min"]))
     return {"s_min": s_min, "v_min": v_min}
@@ -87,19 +108,26 @@ def tune_thresholds(model, samples, hand_masks, bg_masks, v):
     if len(hand) == 0:
         return {}
     tpr = np.cumsum(np.bincount(hand, minlength=256)[::-1])[::-1] / len(hand)
-    fpr = np.cumsum(np.bincount(bg, minlength=256)[::-1])[::-1] / max(len(bg), 1)
+    if len(bg) < v["tune_min_bg"]:
+        fpr = np.zeros(256)
+    else:
+        fpr = np.cumsum(np.bincount(bg, minlength=256)[::-1])[::-1] / len(bg)
     ok = np.flatnonzero(fpr <= v["tune_fpr_high"])
     high = int(ok[0]) if len(ok) else int(np.argmax(tpr - fpr))
+    if not fpr.any():
+        high = v["backproject_thresh"]
     keeps = np.flatnonzero(tpr >= 0.6)
     if len(keeps):
         high = min(high, int(keeps[-1]))
-    high = int(np.clip(high, 40, 220))
+    high = int(np.clip(high, v["tune_high_range"][0], v["tune_high_range"][1]))
     ok = np.flatnonzero(fpr <= v["tune_fpr_low"])
     low = int(ok[0]) if len(ok) else high
+    if not fpr.any():
+        low = v["backproject_low"]
     keeps = np.flatnonzero(tpr >= 0.95)
     if len(keeps):
         low = min(low, int(keeps[-1]))
-    low = int(np.clip(low, 10, high))
+    low = int(np.clip(low, min(v["tune_low_min"], high), high))
     return {"backproject_thresh": high, "backproject_low": low}
 
 
@@ -113,15 +141,55 @@ def grow_hand(model, samples, roi, tuned, v):
         prob = back_project(s["hsv"], model.ratio, v["backproject_blur"])
         if s["gate"] is not None:
             prob = cv2.bitwise_and(prob, s["gate"])
-        m = hysteresis(prob, tuned["backproject_low"], tuned["backproject_thresh"])
+        high = min(tuned["backproject_thresh"], v["grow_thresh"][0])
+        low = min(tuned["backproject_low"], v["grow_thresh"][1])
+        m = hysteresis(prob, low, high)
         m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, ellipse(tuned["close_kernel"]))
         n, labels = cv2.connectedComponents(m)
         ids = np.unique(labels[y:y + h, x:x + w])
         region = (np.isin(labels, ids[ids > 0]) * 255).astype(np.uint8)
         region = cv2.bitwise_and(region, window)
-        region = cv2.bitwise_and(region, ((prob >= tuned["backproject_low"]) * 255).astype(np.uint8))
+        region = cv2.bitwise_and(region, ((prob >= low) * 255).astype(np.uint8))
         regions.append(region)
     return regions
+
+
+def lookalikes(hand_p, samples, hand_zone, v):
+    plain = hand_p / hand_p.max() if hand_p.max() > 0 else hand_p
+    plain = np.where(plain >= v["min_hand_bin"], plain * 255, 0).astype(np.float32)
+    away = cv2.bitwise_not(cv2.dilate(hand_zone, ellipse(25)))
+    votes = np.zeros(samples[0]["hsv"].shape[:2], np.float32)
+    for s in samples:
+        prob = back_project(s["hsv"], plain, v["backproject_blur"])
+        if s["gate"] is not None:
+            prob = cv2.bitwise_and(prob, s["gate"])
+        votes += cv2.bitwise_and((prob >= v["lookalike_thresh"]).astype(np.uint8) * 255, away) > 0
+    found = ((votes >= 0.5 * len(samples)) * 255).astype(np.uint8)
+    found = cv2.morphologyEx(found, cv2.MORPH_OPEN, ellipse(5))
+    if not found.any() or found.mean() / 255 > v["lookalike_max_area"]:
+        return None
+    return cv2.dilate(found, ellipse(15))
+
+
+def distractor_map(model, samples, hand_regions, params, v):
+    found = np.zeros(samples[0]["hsv"].shape[:2], np.uint8)
+    for s, region in zip(samples, hand_regions):
+        prob = back_project(s["hsv"], model.ratio, v["backproject_blur"])
+        if s["gate"] is not None:
+            prob = cv2.bitwise_and(prob, s["gate"])
+        m = hysteresis(prob, params["backproject_low"], params["backproject_thresh"])
+        m = cv2.bitwise_and(m, cv2.bitwise_not(cv2.dilate(region, ellipse(25))))
+        found = cv2.bitwise_or(found, m)
+    found = cv2.morphologyEx(found, cv2.MORPH_OPEN, ellipse(5))
+    if not found.any():
+        return None
+    return cv2.dilate(found, ellipse(15))
+
+
+def merge_maps(a, b):
+    if a is None or b is None:
+        return a if b is None else b
+    return cv2.bitwise_or(a, b)
 
 
 def build_model(samples, roi, cfg, tuned=None):
@@ -133,16 +201,16 @@ def build_model(samples, roi, cfg, tuned=None):
     roi_mask[y:y + h, x:x + w] = 255
 
     hand_hist = np.zeros(bins, np.float32)
-    hsv_px, crcb_px, cores = [], [], []
+    hsv_px, chroma_px, cores = [], [], []
     for s in samples:
         m = roi_mask if s["gate"] is None else cv2.bitwise_and(roi_mask, s["gate"])
         m = core_mask(s["hsv"], m, bins, v["calib_core_mass"])
         cores.append(m)
         hand_hist += hs_hist(s["hsv"], m, bins)
         hsv_px.append(s["hsv"][m > 0])
-        crcb_px.append(s["ycrcb"][m > 0][:, 1:])
+        chroma_px.append(s["chroma"][m > 0])
     hsv_px = np.concatenate(hsv_px)
-    crcb_px = np.concatenate(crcb_px)
+    chroma_px = np.concatenate(chroma_px)
     if len(hsv_px) < 0.3 * w * h * len(samples):
         raise CalibrationError("the box is too grey or dark to track by colour")
 
@@ -150,9 +218,9 @@ def build_model(samples, roi, cfg, tuned=None):
     margin = np.array(v["box_margin"])
     lo = np.clip(np.percentile(hsv_px, p_lo, axis=0) - margin, 0, [179, 255, 255]).astype(int)
     hi = np.clip(np.percentile(hsv_px, p_hi, axis=0) + margin, 0, [179, 255, 255]).astype(int)
-    cm = v["ycrcb_margin"]
-    crcb_lo = np.clip(np.percentile(crcb_px, p_lo, axis=0) - cm, 0, 255).astype(int)
-    crcb_hi = np.clip(np.percentile(crcb_px, p_hi, axis=0) + cm, 0, 255).astype(int)
+    cm = v["chroma_margin"]
+    chroma_lo = np.clip(np.percentile(chroma_px, p_lo, axis=0) - cm, 0, 255).astype(int)
+    chroma_hi = np.clip(np.percentile(chroma_px, p_hi, axis=0) + cm, 0, 255).astype(int)
 
     last = samples[-1]
     skin = hsv_box(last["hsv"], lo, hi)
@@ -168,7 +236,11 @@ def build_model(samples, roi, cfg, tuned=None):
     reach[max(0, y - 3 * h):, max(0, x - 2 * w):x + 3 * w] = 255
     touching = np.unique(labels[exclude > 0])
     exclude[np.isin(labels, touching[touching > 0])] = 255
-    exclude = cv2.bitwise_or(cv2.dilate(exclude, np.ones((9, 9), np.uint8)), reach)
+    hand_zone = cv2.dilate(exclude, np.ones((9, 9), np.uint8))
+    early = lookalikes(normalize(hand_hist), samples, hand_zone, v)
+    exclude = cv2.bitwise_or(hand_zone, reach)
+    if early is not None:
+        exclude = cv2.bitwise_or(exclude, early)
 
     bg_hist = np.zeros(bins, np.float32)
     keep = cv2.bitwise_not(exclude)
@@ -178,15 +250,22 @@ def build_model(samples, roi, cfg, tuned=None):
         bgs.append(m)
         bg_hist += hs_hist(s["hsv"], m, bins)
 
-    model = ColorModel(normalize(hand_hist), normalize(bg_hist), tuple(lo), tuple(hi),
-                       tuple(crcb_lo), tuple(crcb_hi), v["min_hand_bin"])
+    model = ColorModel(normalize(hand_hist), normalize(bg_hist + v["bg_prior"]), tuple(lo), tuple(hi),
+                       tuple(chroma_lo), tuple(chroma_hi), v["min_hand_bin"])
+    model.core_lo, model.core_hi = tuple(chroma_lo), tuple(chroma_hi)
     if tuned is None:
+        model.distractors = merge_maps(early, distractor_map(model, samples, [hand_zone] * len(samples), v, v))
         return model
 
     tuned = dict(tuned)
+    regions = [hand_zone] * len(samples)
     tuned.update(tune_thresholds(model, samples, cores, bgs, v))
+    limit = v["grow_max_area"] * shape[0] * shape[1]
     for _ in range(v["grow_passes"]):
-        regions = grow_hand(model, samples, roi, tuned, v)
+        grown_regions = grow_hand(model, samples, roi, tuned, v)
+        if np.mean([np.count_nonzero(r) for r in grown_regions]) > limit:
+            break
+        regions = grown_regions
         grown = np.zeros(bins, np.float32)
         bg_hist = np.zeros(bins, np.float32)
         for i, (s, r) in enumerate(zip(samples, regions)):
@@ -196,8 +275,13 @@ def build_model(samples, roi, cfg, tuned=None):
         if grown.sum() <= 0:
             break
         model.hand_p = normalize(hand_hist + grown)
-        model.bg_p = normalize(bg_hist)
+        model.bg_p = normalize(bg_hist + v["bg_prior"])
         model.refresh()
         tuned.update(tune_thresholds(model, samples, regions, bgs, v))
     model.tuned = {k: tuned[k] for k in ("backproject_thresh", "backproject_low") if k in tuned}
+    grown_px = np.concatenate([s["chroma"][r > 0] for s, r in zip(samples, regions)])
+    if len(grown_px) > len(chroma_px):
+        model.chroma_lo = tuple(np.clip(np.percentile(grown_px, p_lo, axis=0) - cm, 0, 255).astype(int))
+        model.chroma_hi = tuple(np.clip(np.percentile(grown_px, p_hi, axis=0) + cm, 0, 255).astype(int))
+    model.distractors = merge_maps(early, distractor_map(model, samples, regions, tuned, v))
     return model

@@ -6,7 +6,7 @@ import numpy as np
 from . import hand, segmentation
 from .calibration import CalibrationError, build_model, hs_hist, tune_gate, tune_kernels
 from .filters import Track, assign
-from .preprocess import WhiteBalance, centre_shift, hue_lut, reliability_gate, rotate_hue, shift_box
+from .preprocess import WhiteBalance, centre_shift, hue_lut, reliability_gate, rg_chroma, rotate_hue, shift_box
 from .state import HandState
 
 ENHANCEMENTS = tuple(f"E{i}" for i in range(1, 10))
@@ -15,7 +15,7 @@ NAMES = {
     "E2": "hue gate",
     "E3": "calibration",
     "E4": "back-projection",
-    "E5": "YCrCb",
+    "E5": "rg chroma",
     "E6": "open/close",
     "E7": "blob scoring",
     "E8": "palm geometry",
@@ -54,6 +54,7 @@ class HandTracker:
         self.adapted = False
         self.tuned = {}
         self.overrides = set()
+        self.learned = None
         self.tune_version = 0
         self.debug_enabled = False
         self.debug = {}
@@ -78,6 +79,7 @@ class HandTracker:
     def reset(self):
         self.tracks = []
         self.next_id = 0
+        self.still = None
         self.prev = {}
         self.last_t = None
         self.frame_count = 0
@@ -112,6 +114,7 @@ class HandTracker:
         s = self.v["scale"]
         self.calib_roi = tuple(int(round(c * s)) for c in (roi or self.calib_box(size)))
         self.overrides.clear()
+        self.learned = None
         self._build_model()
         self.reset()
 
@@ -182,8 +185,7 @@ class HandTracker:
         if self.toggles["E2"]:
             hsv = rotate_hue(hsv, self.lut)
             gate = reliability_gate(hsv, self.param("s_min"), self.param("v_min"), self.v["v_max"])
-        ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
-        return {"bgr": bgr, "hsv": hsv, "gate": gate, "ycrcb": ycrcb}
+        return {"bgr": bgr, "hsv": hsv, "gate": gate, "chroma": rg_chroma(bgr)}
 
     def _fixed_box(self):
         lo, hi = self.v["baseline_lo"], self.v["baseline_hi"]
@@ -231,11 +233,11 @@ class HandTracker:
             prob = cv2.bitwise_and(prob, gate)
         if T["E5"]:
             if model is not None:
-                lo, hi = model.crcb_lo, model.crcb_hi
+                lo, hi = model.chroma_lo, model.chroma_hi
             else:
-                lo, hi = v["ycrcb_default_lo"][1:], v["ycrcb_default_hi"][1:]
-            ycc = cv2.inRange(p["ycrcb"], (0, int(lo[0]), int(lo[1])), (255, int(hi[0]), int(hi[1])))
-            mask = cv2.bitwise_and(mask, ycc)
+                lo, hi = v["chroma_default_lo"], v["chroma_default_hi"]
+            chroma = cv2.inRange(p["chroma"], tuple(int(c) for c in lo), tuple(int(c) for c in hi))
+            mask = cv2.bitwise_and(mask, chroma)
         self._lap("segment", clock)
 
         if T["E6"]:
@@ -251,7 +253,12 @@ class HandTracker:
         preds = [tuple(tr.pred * v["scale"]) for tr in self.tracks] if T["E9"] else []
         motion = None
         if T["E7"]:
-            motion = self.motion(cv2.cvtColor(p["bgr"], cv2.COLOR_BGR2GRAY))
+            motion = self.motion(prob)
+            avoid = self._distractors(model, mask.shape)
+            if avoid is not None:
+                keep = cv2.bitwise_not(avoid)
+                mask = cv2.bitwise_and(mask, keep)
+                light = cv2.bitwise_and(light, keep)
         n_px = mask.shape[0] * mask.shape[1]
         cands = segmentation.find_candidates(mask, v["min_blob"] * n_px, v["min_area"] * n_px,
                                              v["max_area"] * n_px, v["min_solidity"], T["E7"])
@@ -265,9 +272,22 @@ class HandTracker:
                 c.mean_prob = cv2.mean(prob, mask=c.blob)[0] / 255.0
             c.conf = 0.5 * c.mean_prob + 0.3 * float(np.clip((c.solidity - 0.45) / 0.45, 0, 1))
         if T["E8"]:
-            dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+            shape_mask = cv2.bitwise_and(segmentation.fill_holes(light), mask)
+            if model is not None and model.core_lo is not None:
+                core = cv2.inRange(p["chroma"], tuple(int(c) for c in model.core_lo),
+                                   tuple(int(c) for c in model.core_hi))
+                core = cv2.bitwise_and(shape_mask, core)
+                if cv2.countNonZero(core) > v["core_min_share"] * cv2.countNonZero(shape_mask):
+                    shape_mask = segmentation.fill_holes(cv2.morphologyEx(core, cv2.MORPH_OPEN, segmentation.ellipse(3)))
+            dist = cv2.distanceTransform(shape_mask, cv2.DIST_L2, 5)
             for c in cands:
-                hand.measure(c, dist, light, v)
+                near = None
+                if T["E9"] and self.tracks:
+                    tr = min(self.tracks, key=lambda q: np.hypot(q.pred[0] * v["scale"] - c.center[0],
+                                                                 q.pred[1] * v["scale"] - c.center[1]))
+                    if tr.area and c.area > tc["merge_growth"] * tr.area:
+                        near = tuple(tr.pred * v["scale"])
+                hand.measure(c, dist, light, v, near, tc["gate"] * v["scale"] * 0.5)
         self._lap("contours", clock)
 
         states, used = self._track(cands, t, inv) if T["E9"] else self._raw(cands, dt, inv)
@@ -278,6 +298,8 @@ class HandTracker:
         for c in used:
             self.hand_mask = cv2.bitwise_or(self.hand_mask, c.hand_blob if c.hand_blob is not None else c.blob)
         self._adapt(used, hsv, gate)
+        if T["E7"] and T["E9"]:
+            self._learn_static(mask, motion, used)
         self._lap("total", [start])
         if self.debug_enabled:
             self._debug(p, gate, prob, mask, motion, cands, used)
@@ -311,6 +333,8 @@ class HandTracker:
             tr, c = self.tracks[i], cands[j]
             c.conf += 0.2 * (1 - min(cost[i][j] / gates[i], 1))
             tr.update(centers[j], t, self._paddle(c, inv), c.fingers, c.conf, self._scaled(c.contour, inv))
+            if c.area <= tc["merge_growth"] * (tr.area or c.area):
+                tr.area = c.area
         s = self.v["scale"]
         merged_blobs = [cands[j].blob for _, j in pairs]
         for i, tr in enumerate(self.tracks):
@@ -322,6 +346,8 @@ class HandTracker:
                 tr.hold(t)
             else:
                 tr.miss(t)
+        if self.toggles["E7"]:
+            self._escape_static(cands, pairs, matched_c, t, inv)
         used = [cands[j] for i, j in pairs if self.tracks[i].confirmed]
         self.tracks = [tr for tr in self.tracks
                        if (tr.confirmed and tr.missed <= tc["max_coast"] and tr.merged <= tc["max_merge"])
@@ -332,6 +358,7 @@ class HandTracker:
             tr = Track(self.next_id, centers[j], t, tc)
             self.next_id += 1
             tr.radius = self._paddle(c, inv)
+            tr.area = c.area
             tr.conf = c.conf + 0.2
             tr.contour = self._scaled(c.contour, inv)
             if c.fingers >= 0:
@@ -341,6 +368,51 @@ class HandTracker:
                             tr.conf, tr.missed == 0 and tr.merged == 0, tr.raw, tr.contour)
                   for tr in self.tracks if tr.confirmed]
         return states, used
+
+    def _distractors(self, model, shape):
+        maps = [m for m in ((model.distractors if model is not None else None), self.learned) if m is not None]
+        if not maps or maps[0].shape != shape:
+            return None
+        return maps[0] if len(maps) == 1 else cv2.bitwise_or(maps[0], maps[1])
+
+    def _learn_static(self, mask, motion, used):
+        if not any(tr.confirmed and tr.missed == 0 for tr in self.tracks) or motion is None:
+            self.still = None
+            return
+        hands = np.zeros_like(mask)
+        for c in used:
+            hands = cv2.bitwise_or(hands, c.blob)
+        hands = cv2.dilate(hands, segmentation.ellipse(31))
+        still = (mask > 0) & (motion == 0) & (hands == 0)
+        if self.still is None or self.still.shape != mask.shape:
+            self.still = np.zeros(mask.shape, np.uint16)
+        self.still = np.where(still, self.still + 1, 0).astype(np.uint16)
+        ripe = self.still >= self.tc["learn_static_frames"]
+        if ripe.any():
+            found = cv2.dilate((ripe * 255).astype(np.uint8), segmentation.ellipse(15))
+            self.learned = found if self.learned is None else cv2.bitwise_or(self.learned, found)
+            self.still[ripe] = 0
+
+    def _escape_static(self, cands, pairs, matched_c, t, inv):
+        tc = self.tc
+        moving = [j for j, c in enumerate(cands) if j not in matched_c and c.motion >= tc["moving_motion"]]
+        for i, j in list(pairs):
+            tr, c = self.tracks[i], cands[j]
+            tr.static = tr.static + 1 if c.motion < tc["static_motion"] else 0
+            if not tr.confirmed or tr.static < tc["static_frames"] or not moving:
+                continue
+            k = max(moving, key=lambda m: cands[m].score)
+            moving.remove(k)
+            new = Track(self.next_id, (cands[k].center[0] * inv, cands[k].center[1] * inv), t, tc)
+            self.next_id += 1
+            new.confirmed = True
+            new.radius = self._paddle(cands[k], inv)
+            new.area = cands[k].area
+            new.conf = cands[k].conf
+            self.tracks[i] = new
+            pairs.remove((i, j))
+            pairs.append((i, k))
+            matched_c.add(k)
 
     def _adapt(self, used, hsv, gate):
         T, tc, v = self.toggles, self.tc, self.v

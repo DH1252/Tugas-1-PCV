@@ -52,5 +52,12 @@ def shift_box(lo, hi, shift):
     return ((lo[0] + shift) % 180, lo[1], lo[2]), ((hi[0] + shift) % 180, hi[1], hi[2])
 
 
+def rg_chroma(bgr):
+    total = cv2.transform(bgr.astype(np.uint16), np.ones((1, 3), np.float32)) + 1
+    _, g, r = cv2.split(bgr)
+    return cv2.merge([cv2.divide(r, total, scale=255, dtype=cv2.CV_8U),
+                      cv2.divide(g, total, scale=255, dtype=cv2.CV_8U)])
+
+
 def reliability_gate(hsv, s_min, v_min, v_max):
     return cv2.inRange(hsv, (0, s_min, v_min), (255, 255, v_max))

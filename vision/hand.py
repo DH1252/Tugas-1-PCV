@@ -2,11 +2,14 @@ import cv2
 import numpy as np
 
 
-def palm_center(dist, blob, bbox, top_bias):
+def palm_center(dist, blob, bbox, top_bias, near=None, spread=None):
     x, y, w, h = bbox
     d = dist[y:y + h, x:x + w] * (blob[y:y + h, x:x + w] > 0)
     if top_bias:
         d = d * (1 - top_bias * np.linspace(0, 1, h, dtype=np.float32))[:, None]
+    if near is not None and spread:
+        yy, xx = np.mgrid[y:y + h, x:x + w]
+        d = d * np.exp(-((xx - near[0]) ** 2 + (yy - near[1]) ** 2) / (2 * spread ** 2)).astype(np.float32)
     _, _, _, (px, py) = cv2.minMaxLoc(d)
     return (x + px, y + py), float(dist[y + py, x + px])
 
@@ -51,8 +54,8 @@ def count_fingers(contour, center, r, depth_ratio, max_angle, fist_ratio):
     return 0 if far < fist_ratio * r else 1
 
 
-def measure(cand, dist, light, v):
-    center, r = palm_center(dist, cand.blob, cand.bbox, v["palm_top_bias"])
+def measure(cand, dist, light, v, near=None, spread=None):
+    center, r = palm_center(dist, cand.blob, cand.bbox, v["palm_top_bias"], near, spread)
     cand.center, cand.radius = center, r
     cand.hand_blob = hand_region(cand.blob, center, r, v["arm_cut"], v["wrist_cut"])
     near = cv2.bitwise_and(light, cv2.dilate(cand.blob, np.ones((5, 5), np.uint8)))

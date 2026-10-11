@@ -107,6 +107,30 @@ Items: **ball** (normal), **balloon** (slow and floaty), **heavy** (needs a firm
 **spike** (don't touch it, let it fall), **star** (touch it for a life or points). You lose a
 life when a ball reaches the bottom or when you touch a spike.
 
+### Keeping track (colour-only robustness)
+
+These all use colour only, no learned detectors:
+- **Lighting:** the second colour check uses rg chromaticity, which ignores brightness, so
+  the glove isn't dropped when it moves into brighter or darker light or the camera
+  re-exposes.
+- **Motion blur:** the palm is measured on pixels whose chromaticity matches the calibrated
+  glove ("core" colour). Smeared edges, where glove and background mix, still count for
+  detection but don't drag the palm point.
+- **Look-alike objects:** anything glove-coloured that sits still during calibration is
+  masked out by position, and kept out of the background colour model so the glove colour
+  isn't penalised. Look-alikes that show up later are learned once they've sat still for
+  3 s while your hand is tracked elsewhere.
+- **Getting stuck:** motion is measured on the colour-probability map (also
+  brightness-invariant). If the tracked blob stops moving while another glove-coloured blob
+  is moving, the tracker switches to the moving one after about 0.7 s. When the glove
+  touches a look-alike and the blobs merge, the palm is picked near where the track
+  expects it.
+- **Calibration box:** only the dominant colour in the box is learned. Background showing in
+  the box corners is ignored.
+
+Pick a glove colour that isn't elsewhere in the room anyway; these help, but a unique colour
+is still the strongest cue.
+
 ### Enhancements
 
 | | | |
@@ -115,10 +139,10 @@ life when a ball reaches the bottom or when you touch a spike.
 | E2 | hue gate | hue rotation by +20 so skin is one range; drops low-S, dark and glare pixels |
 | E3 | calibration | per-user HSV and YCrCb ranges and H–S histogram from the calibration box |
 | E4 | back-projection | `P(hand \| colour)` from hand vs background histograms |
-| E5 | YCrCb | Cr/Cb gate as a second check |
+| E5 | rg chroma | brightness-invariant chromaticity gate, r = R/(R+G+B), g = G/(R+G+B) |
 | E6 | open/close | elliptical opening, then closing, then hole filling |
-| E7 | blob scoring | blobs ranked by size, motion and track proximity |
-| E8 | palm geometry | distance-transform palm centre, forearm cut, finger count |
+| E7 | blob scoring | look-alike masking, blobs ranked by size, colour motion and track proximity |
+| E8 | palm geometry | palm centre from core-colour pixels, forearm cut, finger count |
 | E9 | temporal | Kalman per hand, One Euro smoothing, two-hand assignment, adaptive histogram |
 
 With every toggle off, the tracker is the baseline: fixed `inRange`, erode/dilate, largest

@@ -82,6 +82,8 @@ class Track:
         self.hits = 1
         self.missed = 0
         self.merged = 0
+        self.static = 0
+        self.area = 0.0
         self.confirmed = tc["birth"] <= 1
         self.radius = None
         self.votes = deque(maxlen=tc["finger_vote"])
