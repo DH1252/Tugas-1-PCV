@@ -115,6 +115,9 @@ class HandTracker:
         self._build_model()
         self.reset()
 
+    def matches(self, frame):
+        return bool(self.calib_frames) and self.calib_frames[0].shape == self._small(frame).shape
+
     def save(self, path):
         np.savez_compressed(path, frames=np.stack(self.calib_frames), roi=np.array(self.calib_roi),
                             scale=self.v["scale"])

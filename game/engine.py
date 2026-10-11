@@ -98,6 +98,8 @@ class Game:
     def step(self, frame, t, key=-1):
         if self.size is None:
             self.size = (frame.shape[1], frame.shape[0])
+            if self.state == "MENU" and not self.tracker.matches(frame):
+                self.state = "CALIBRATE"
             self._layout()
             self._enter(self.state)
         if self.last_t is not None and t > self.last_t:

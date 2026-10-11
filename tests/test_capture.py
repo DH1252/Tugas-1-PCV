@@ -50,7 +50,7 @@ def fake(monkeypatch, cfg):
 def test_reads_latest_frames(fake):
     src = capture.Source(fake)
     frames = [src.read() for _ in range(5)]
-    assert all(f is not None and f.shape == (480, 640, 3) for f in frames)
+    assert all(f is not None and f.shape == (480, 854, 3) for f in frames)
     assert src.index == 5
     src.release()
 

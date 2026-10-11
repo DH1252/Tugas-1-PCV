@@ -5,8 +5,10 @@ camera:
   stall_timeout: 2.0
   read_timeout: 1.0
   probe_timeout: 4.0
-  width: 640
+  width: 854
   height: 480
+  capture_width: 1280
+  capture_height: 720
   mirror: true
   lock_auto: false
 

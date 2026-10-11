@@ -1,9 +1,12 @@
 import argparse
+import os
 import json
 import time
 from pathlib import Path
 
-import cv2
+os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
+
+import cv2  # noqa: E402
 
 from game import render
 from vision.capture import Source

@@ -4,7 +4,7 @@ import threading
 import time
 
 # MSMF hardware transforms make the camera take seconds to open and can stall reads
-os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 
 import cv2  # noqa: E402
 
@@ -29,8 +29,8 @@ def open_camera(cam):
     fourcc = cam.get("fourcc")
     if fourcc:
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam["width"])
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam["height"])
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam.get("capture_width", cam["width"]))
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam.get("capture_height", cam["height"]))
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     return cap
 

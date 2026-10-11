@@ -26,7 +26,7 @@ kind (no Haar cascades, DNNs or YOLO), not even for evaluation. The tracker uses
   distance transform, frame differencing
 - filtering: Kalman and One Euro
 
-**Assumptions:** a laptop webcam at 640×480 and 30 fps or better, Python 3.10+, and a single
+**Assumptions:** a laptop webcam captured at 1280×720 (MSMF) and processed at 854×480, 30 fps or better, Python 3.10+, and a single
 developer working about 2 weeks. Adjust §8 if the deadline or team size differs.
 
 ---
@@ -58,7 +58,7 @@ developer working about 2 weeks. Adjust §8 if the deadline or team size differs
 7. **Difficulty ramp:** play starts with 1 ball. Another is added every 20 s, up to 4 at once.
    Gravity rises 5% every 30 s, and heavy and spike items become more common.
 
-### Physics (in a 640×480 game space, scaled up for display)
+### Physics (in the 854×480 game space, scaled up for display)
 - Integration is time-based (`dt`), so the game speed doesn't depend on frame rate.
 - **Hand–ball collision.** Let n be the unit vector from the hand centre to the ball centre,
   u the hand velocity and v the ball velocity. When the ball overlaps the paddle and is moving
@@ -139,7 +139,7 @@ Each enhancement below targets one of these failure modes.
 ## 4. Enhanced HSV pipeline
 
 ```
-Webcam frame (BGR 640×480, mirrored) ──downscale ×0.5──►
+Webcam 1280×720 → frame (BGR 854×480, mirrored) ──downscale ×0.5──►
  [E1] Preprocess: Gaussian blur 5×5 · gray-world white balance · (lock camera AE/AWB if backend allows)
    ▼
  BGR→HSV  [E2] hue rotation h' = (h+20) mod 180 · reliability gate (S ≥ 30, 40 ≤ V ≤ 250)
