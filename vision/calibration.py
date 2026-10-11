@@ -34,7 +34,6 @@ class ColorModel:
     hi: tuple
     crcb_lo: tuple
     crcb_hi: tuple
-    face_box: tuple | None
     min_bin: float
     ratio: np.ndarray = None
     tuned: dict = field(default_factory=dict)
@@ -104,12 +103,11 @@ def tune_thresholds(model, samples, hand_masks, bg_masks, v):
     return {"backproject_thresh": high, "backproject_low": low}
 
 
-def grow_hand(model, samples, roi, avoid, tuned, v):
+def grow_hand(model, samples, roi, tuned, v):
     shape = samples[0]["hsv"].shape[:2]
     x, y, w, h = roi
     window = np.zeros(shape, np.uint8)
     window[max(0, y - 3 * h):y + 4 * h, max(0, x - 3 * w):x + 4 * w] = 255
-    window = cv2.bitwise_and(window, cv2.bitwise_not(avoid))
     regions = []
     for s in samples:
         prob = back_project(s["hsv"], model.ratio, v["backproject_blur"])
@@ -161,27 +159,16 @@ def build_model(samples, roi, cfg, tuned=None):
     if last["gate"] is not None:
         skin = cv2.bitwise_and(skin, last["gate"])
     _, skin = denoise(skin, 5, 9)
-    n, labels, stats, centroids = cv2.connectedComponentsWithStats(skin)
+    n, labels = cv2.connectedComponents(skin)
 
     gx, gy = int(0.1 * w), int(0.1 * h)
     exclude = np.zeros(shape, np.uint8)
     exclude[max(0, y - gy):y + h + gy, max(0, x - gx):x + w + gx] = 255
-    face_i, best = None, v["face_min_area"] * shape[0] * shape[1]
-    for i in range(1, n):
-        comp = labels == i
-        if exclude[comp].any():
-            exclude[comp] = 255
-            continue
-        area = stats[i, cv2.CC_STAT_AREA]
-        if area >= best and centroids[i][1] < 0.75 * shape[0]:
-            face_i, best = i, area
-    face_box = None
-    face = np.zeros(shape, np.uint8)
-    if face_i is not None:
-        exclude[labels == face_i] = 255
-        face[labels == face_i] = 255
-        face_box = tuple(int(s) for s in stats[face_i, :4])
-    exclude = cv2.dilate(exclude, np.ones((9, 9), np.uint8))
+    reach = np.zeros(shape, np.uint8)
+    reach[max(0, y - 3 * h):, max(0, x - 2 * w):x + 3 * w] = 255
+    touching = np.unique(labels[exclude > 0])
+    exclude[np.isin(labels, touching[touching > 0])] = 255
+    exclude = cv2.bitwise_or(cv2.dilate(exclude, np.ones((9, 9), np.uint8)), reach)
 
     bg_hist = np.zeros(bins, np.float32)
     keep = cv2.bitwise_not(exclude)
@@ -192,21 +179,24 @@ def build_model(samples, roi, cfg, tuned=None):
         bg_hist += hs_hist(s["hsv"], m, bins)
 
     model = ColorModel(normalize(hand_hist), normalize(bg_hist), tuple(lo), tuple(hi),
-                       tuple(crcb_lo), tuple(crcb_hi), face_box, v["min_hand_bin"])
+                       tuple(crcb_lo), tuple(crcb_hi), v["min_hand_bin"])
     if tuned is None:
         return model
 
     tuned = dict(tuned)
     tuned.update(tune_thresholds(model, samples, cores, bgs, v))
-    avoid = cv2.dilate(face, ellipse(15))
     for _ in range(v["grow_passes"]):
-        regions = grow_hand(model, samples, roi, avoid, tuned, v)
+        regions = grow_hand(model, samples, roi, tuned, v)
         grown = np.zeros(bins, np.float32)
-        for s, r in zip(samples, regions):
+        bg_hist = np.zeros(bins, np.float32)
+        for i, (s, r) in enumerate(zip(samples, regions)):
             grown += hs_hist(s["hsv"], r, bins)
+            bgs[i] = cv2.bitwise_and(bgs[i], cv2.bitwise_not(cv2.dilate(r, ellipse(15))))
+            bg_hist += hs_hist(s["hsv"], bgs[i], bins)
         if grown.sum() <= 0:
             break
         model.hand_p = normalize(hand_hist + grown)
+        model.bg_p = normalize(bg_hist)
         model.refresh()
         tuned.update(tune_thresholds(model, samples, regions, bgs, v))
     model.tuned = {k: tuned[k] for k in ("backproject_thresh", "backproject_low") if k in tuned}

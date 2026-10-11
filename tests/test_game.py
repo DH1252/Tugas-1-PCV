@@ -7,7 +7,7 @@ from game.spawner import Spawner
 from game.ui import DwellMenu, Button, GestureHold
 
 from .clips import write_clip
-from .synth import calibration_frames, make_frame
+from .synth import GLOVE, calibration_frames, make_frame
 
 
 class Player:
@@ -18,7 +18,7 @@ class Player:
         self.i = 0
 
     def step(self, key=-1):
-        out = self.game.step(make_frame([tuple(self.hand)], seed=self.i), self.t, key)
+        out = self.game.step(make_frame([{"center": tuple(self.hand), "color": GLOVE}], seed=self.i), self.t, key)
         self.t += 1 / 30
         self.i += 1
         return out
@@ -170,7 +170,7 @@ def test_ticks_between_camera_frames_extrapolate(cfg, tmp_path):
         player.hand += (6, 0)
         player.step()
     base = game.hands[0].palm[0]
-    frame = make_frame([tuple(player.hand)], seed=0)
+    frame = make_frame([{"center": tuple(player.hand), "color": GLOVE}], seed=0)
     calls = []
     real = game.tracker.process
     game.tracker.process = lambda *a: calls.append(1) or real(*a)
@@ -187,7 +187,7 @@ def test_play_at_60_with_camera_at_30(cfg, tmp_path):
     for i in range(60 * 10):
         if i % 2 == 0:
             player.chase()
-            frame = make_frame([tuple(player.hand)], seed=i)
+            frame = make_frame([{"center": tuple(player.hand), "color": GLOVE}], seed=i)
         game.step(frame, player.t, fresh=i % 2 == 0)
         player.t += 1 / 60
     assert game.hits > 3

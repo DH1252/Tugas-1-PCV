@@ -131,6 +131,5 @@ def score_candidates(cands, prob, motion, predictions, gate, weights):
         if predictions:
             d = min(np.hypot(c.center[0] - p[0], c.center[1] - p[1]) for p in predictions)
             c.proximity = float(np.exp(-(d / gate) ** 2))
-        faceness = (1.0 - c.motion) * np.clip((c.solidity - 0.85) / 0.1, 0.0, 1.0)
         c.score = (weights["size"] * c.area / largest + weights["motion"] * c.motion
-                   + weights["proximity"] * c.proximity - weights["face"] * faceness)
+                   + weights["proximity"] * c.proximity)

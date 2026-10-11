@@ -7,7 +7,7 @@ PALM = np.array((120, 160, 210), np.float32)
 EDGE = np.array((70, 95, 165), np.float32)
 
 
-def shaded_frame(center, size=(640, 480), face=(320, 110), seed=0, scale=1.4, fingers=5):
+def shaded_frame(center, size=(640, 480), face=None, seed=0, scale=1.4, fingers=5):
     w, h = size
     img = np.empty((h, w, 3), np.uint8)
     img[:] = BACKGROUND

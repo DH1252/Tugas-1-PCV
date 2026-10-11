@@ -5,7 +5,6 @@ import numpy as np
 
 from . import hand, segmentation
 from .calibration import CalibrationError, build_model, hs_hist, tune_gate, tune_kernels
-from .face import FaceTracker
 from .filters import Track, assign
 from .preprocess import WhiteBalance, centre_shift, hue_lut, reliability_gate, rotate_hue, shift_box
 from .state import HandState
@@ -18,7 +17,7 @@ NAMES = {
     "E4": "back-projection",
     "E5": "YCrCb",
     "E6": "open/close",
-    "E7": "face + scoring",
+    "E7": "blob scoring",
     "E8": "palm geometry",
     "E9": "temporal",
 }
@@ -85,9 +84,6 @@ class HandTracker:
         self.lost = 0
         self.wb.reset()
         self.motion.reset()
-        self.face = None
-        if self.model is not None and self.model.face_box is not None:
-            self.face = FaceTracker(self.model.face_box, self.v["face_max_jump"], self.v["face_max_shift"])
 
     def set_toggles(self, toggles):
         rebuild = any(toggles[k] != self.toggles[k] for k in ("E1", "E2", "E3"))
@@ -255,11 +251,6 @@ class HandTracker:
         preds = [tuple(tr.pred * v["scale"]) for tr in self.tracks] if T["E9"] else []
         motion = None
         if T["E7"]:
-            if self.face is not None:
-                self.face.update(prob)
-                keep = cv2.bitwise_not(self.face.mask(mask.shape, v["face_margin"]))
-                mask = cv2.bitwise_and(mask, keep)
-                light = cv2.bitwise_and(light, keep)
             motion = self.motion(cv2.cvtColor(p["bgr"], cv2.COLOR_BGR2GRAY))
         n_px = mask.shape[0] * mask.shape[1]
         cands = segmentation.find_candidates(mask, v["min_blob"] * n_px, v["min_area"] * n_px,
@@ -382,9 +373,6 @@ class HandTracker:
             if c.radius > 0:
                 cv2.circle(vis, (int(c.center[0]), int(c.center[1])), int(c.radius), (0, 255, 0), 1)
             cv2.circle(vis, (int(c.center[0]), int(c.center[1])), 2, (0, 255, 0), -1)
-        if self.face is not None:
-            color = (0, 0, 255) if self.face.frozen else (255, 0, 255)
-            cv2.ellipse(vis, self.face.ellipse, color, 1)
         for tr in self.tracks:
             cv2.circle(vis, (int(tr.pred[0] * s), int(tr.pred[1] * s)), 6, (255, 255, 255), 1)
             cv2.circle(vis, (int(tr.out[0] * s), int(tr.out[1] * s)), 3, (255, 255, 255), -1)

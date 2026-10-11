@@ -4,6 +4,7 @@ import numpy as np
 SKIN = (120, 160, 210)
 FACE = (112, 150, 205)
 BACKGROUND = (105, 95, 85)
+GLOVE = (60, 170, 60)
 FINGER_ANGLES = (-10, 10, -30, 30, -75)
 
 
@@ -47,8 +48,8 @@ def _noise(shape, sigma, k):
     return _NOISE[key]
 
 
-def calibration_frames(cfg, n=None, size=(640, 480), face=(320, 110)):
+def calibration_frames(cfg, n=None, size=(640, 480), face=(320, 110), color=SKIN):
     bx, by, bw, bh = cfg["vision"]["calib_box"]
     center = ((bx + bw / 2) * size[0], (by + bh / 2) * size[1])
     n = n or cfg["vision"]["calib_frames"]
-    return [make_frame([center], face=face, size=size, seed=i) for i in range(n)], center
+    return [make_frame([{"center": center, "color": color}], face=face, size=size, seed=i) for i in range(n)], center

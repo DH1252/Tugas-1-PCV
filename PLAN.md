@@ -160,7 +160,7 @@ Webcam 1280×720 → frame (BGR 854×480, mirrored) ──downscale ×0.5──�
    ▼                                                                         │ [E9c] adaptive
  [E6] denoise: opening (remove specks) → closing (fill gaps) · fill holes    │  histogram
    ▼                                                                         │  update (EMA)
- [E7] face removal · contour filter and scoring                              │
+ [E7] contour filter and scoring                                            │
    ▼                                                                         │
  [E8] palm centre (distance transform) · arm cut · hull/defects → fingers ───┘
    ▼
@@ -179,7 +179,7 @@ Webcam 1280×720 → frame (BGR 854×480, mirrored) ──downscale ×0.5──�
 | **E4** | **Discriminative histogram back-projection** (Swain & Ballard ratio histogram) | A box threshold is binary and also takes in background colours that look like skin | `P(hand | colour) = H_hand / (H_hand + H_bg)`, a bounded form of the ratio histogram, where `H_bg` is sampled outside the ROI at calibration. The face and the arm are left out of `H_bg`, or skin would cancel itself out. `cv2.calcBackProject` gives a per-pixel probability, then blur and threshold it (τ = 90/255). Colours common in the background are down-weighted automatically. | Must |
 | **E5** | **Hybrid colour-space fusion**: AND with a YCrCb gate | Some false positives are separable in Cr/Cb but not in H–S | The Cr/Cb range comes from calibration percentiles ± a margin. Fall back to Chai & Ngan (Cr 133–173, Cb 77–127). It is loose on purpose, a veto rather than the main detector. | Should |
 | **E6** | **Morphological denoising: opening then closing** | The raw mask has isolated false pixels (sensor noise, small skin-coloured patches in the background) and holes inside the hand (shadows, highlights, knuckle creases). Fingers can also break away from the palm. | **Opening** (erode then dilate, elliptical 5×5 kernel) removes specks smaller than the kernel without shrinking the hand. **Closing** (dilate then erode, elliptical 9×9) fills holes and reconnects fingers. Opening comes first so closing doesn't grow the noise. Holes still left are filled by redrawing each outer contour filled. Elliptical kernels keep the hand outline rounder than square ones. The baseline only has a square 3×3 erode/dilate (an opening with no closing), so this step is measured on its own. If closing merges the fingers, E8 counts fingers on a mask closed with a smaller kernel. | Must |
-| **E7** | **Face removal and contour scoring** | The face or other skin blobs being picked as a hand | **Face removal without a detector:** at calibration, the largest skin blob outside the hand box is taken as the face. It is then tracked with **mean shift** on the same back-projection map, which is CamShift (Bradski 1998) with the window size fixed at the calibrated face size. Letting the size adapt made the window creep onto a nearby hand. The window freezes when the probability mass inside it jumps by more than 35%, which means a hand has entered it. Its ellipse plus a margin is removed from the hand mask. Keep contours with area 1.5–40% of the frame and solidity ≥ 0.45. Rank them by score = size + motion (overlap with a frame-difference mask) + closeness to a Kalman prediction − a penalty for being still, elliptical and without finger gaps. Take the top 1 or 2. | Must (scoring), Should (face, motion) |
+| **E7** | **Contour filtering and scoring** | Skin- or glove-coloured clutter being picked as a hand | Keep contours with area 0.8–40% of the frame and solidity ≥ 0.45. Rank them by score = size + motion (overlap with a frame-difference mask) + closeness to a Kalman prediction. Take the top 1 or 2. Face removal was dropped: the player wears a coloured glove instead, so the face no longer matches the calibrated colour. | Must |
 | **E8** | **Hand geometry** | The centroid drifts toward the forearm; paddle size and gestures are needed | Palm centre = arg-max of `cv2.distanceTransform`, with palm radius r = its value. The paddle radius is 2r. Cut the mask outside a 3r circle and below a wrist line 1.3r under the palm centre, which removes the forearm (this assumes the arm comes from below). The cut mask is also what the IoU metric scores. Use `convexHull` + `convexityDefects` with depth > 0.4r and angle < 90°, so fingers = defects + 1. Treat it as a fist if the farthest hull point is < 1.6r away. Debounce with a majority vote over 8 frames. | Must (palm centre), Should (fingers) |
 | **E9** | **Temporal filtering and two-hand tracking** | Jitter, short dropouts, slow full-frame search, hands swapping identity | (a) A `cv2.KalmanFilter` per hand with constant velocity. It predicts the next position, rejects jumps more than 100 px from the prediction (the gate widens while coasting), carries the paddle through up to 5 lost frames, and boosts candidates near the prediction in E7's scoring. At 320×240 a full-frame search already takes about 3 ms, so no ROI cropping is done. Its velocity estimate drives the ball physics. (b) A **One Euro filter** (Casiez et al., 2012) on the paddle position: little smoothing when the hand is slow, so the paddle stays steady, and little lag when it is fast, so swats land. (c) **Adaptive model update**: every 10 frames, if confidence > 0.7, `H_hand ← (1−α)H_hand + α·H_current` with α ≈ 0.03, using pixels from the *eroded* contour only. Reset on `c` or after a long loss so drift can't build up. (d) **Two hands:** match blobs to tracks by trying both pairings and keeping the one with the smaller total distance to the predictions. A track starts after 3 frames in a row with a detection and ends after 5 frames of coasting. When the hands touch and merge into one blob, the track left without a match holds on, with its velocity damped, for up to 2 s while its prediction lies inside the merged blob. | Must (a, b), Should (d), Could (c) |
 
@@ -190,7 +190,7 @@ bars, the adaptive update gate and the auto-pause.
 ### Starting parameters (tune live with debug-mode trackbars, save to `config.yaml`)
 - **Vision:** processing size 320×240 · blur 5×5 · S ≥ 30, 40 ≤ V ≤ 250 · hue shift +20 ·
   H–S bins 30×32 · back-projection τ = 90 · open 5×5 / close 9×9 (elliptical) · area 0.8–40% ·
-  solidity ≥ 0.45 · face margin 15%
+  solidity ≥ 0.45
 - **Tracking:** Kalman gate 100 px, max coast 5 frames, max merge 60 frames, track birth 3 frames · One Euro
   `min_cutoff=1.0, beta=0.02, d_cutoff=1.0` · α = 0.03 every 10 frames
 - **Physics:** gravity 600 px/s² · e = 0.85 (hand), 0.9 (walls) · min upward speed 600 px/s ·
@@ -211,9 +211,8 @@ tugas-1-pcv/
 ├── vision/
 │   ├── capture.py          # webcam or video-file source, mirroring, AE/AWB lock
 │   ├── preprocess.py       # E1, E2
-│   ├── calibration.py      # E3 (+ background hist for E4, face seed for E7)
+│   ├── calibration.py      # E3 (+ background hist and auto-tuning for E4)
 │   ├── segmentation.py     # E4, E5, E6, E7 (mask, opening/closing, frame differencing, contour scoring)
-│   ├── face.py             # E7 mean-shift face track
 │   ├── hand.py             # E8 geometry and finger count
 │   ├── filters.py          # E9 Kalman, One Euro, tracks, assignment
 │   ├── tracker.py          # HandTracker: runs the stages, honours E1–E9 toggles → list[HandState].
@@ -242,7 +241,7 @@ On synthetic frames the full enhanced tracker takes about 3 ms per frame.
 
 **Debug overlay (`d`):** a 2×3 picture-in-picture grid showing the white-balanced frame,
 reliability gate, back-projection map, final mask, and contours with hull, defects, palm
-circle and face ellipse. The Kalman prediction (hollow) and measurement (solid) are drawn too.
+circle. The Kalman prediction (hollow) and measurement (solid) are drawn too.
 This doubles as report figures.
 
 ---
@@ -326,7 +325,7 @@ than guessed at.
 
 | Risk | Mitigation |
 |---|---|
-| Face picked as a hand, especially as the second hand | Mean-shift face track removed from the mask, plus a scoring penalty for still, elliptical blobs without finger gaps (E7) |
+| Face picked as a hand, especially as the second hand | Play with a coloured glove, so the face doesn't match the calibrated colour (face removal was dropped) |
 | Hand in front of the face is partly cut out with the face | Kalman coasting carries the paddle for up to 5 frames. The calibration screen suggests sitting so the face is near the top centre of the frame and most play happens beside it. |
 | Forearm in the mask (short sleeves) | Distance-transform palm centre and 2.5r cut (E8). For the demo, long sleeves are a valid fallback. |
 | Fast swats pass through balls | 4 physics substeps with interpolated hand positions, and Kalman velocity for the hit |
@@ -373,5 +372,5 @@ than guessed at.
 | 6. Report and demo | Not started |
 
 Where the implementation differs from the plan above, the plan text has been updated: the
-white balance only darkens, E4 uses the bounded `P(hand | colour)` form, the face is tracked
-with fixed-size mean shift, the arm cut uses a wrist line, and there is no ROI cropping.
+white balance only darkens, E4 uses the bounded `P(hand | colour)` form, face removal was
+dropped in favour of a coloured glove, the arm cut uses a wrist line, and there is no ROI cropping.

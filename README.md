@@ -39,7 +39,6 @@ While playing, press `k` to switch to the next camera. Recalibrate (`c`) afterwa
 
 On first start, put your palm (or a gloved hand) in the yellow box and press **Space** to
 capture its colour. To sample a different area, drag a new box with the mouse first; `r` resets
-it. Keep your face in view, because calibration also learns where your face is so it can ignore
 it. Then check that your hand shows green and the background stays dark.
 
 Calibration also auto-tunes the main parameters from what it sees:
@@ -53,7 +52,10 @@ two thresholds (hysteresis): weaker pixels are kept only if they touch strongly 
 The debug window (`--debug`) shows the tuned values. Moving a slider overrides that value until
 you recalibrate. Set `vision.auto_tune: false` to use the `config.yaml` values instead.
 
-Coloured gloves work too: calibration learns whatever colour is in the box and centres its
+**Use a coloured glove.** There is no face detection, so with bare hands your face (also
+skin) can be picked up as a hand. A glove in a colour that isn't on you or behind you avoids
+that; check the room for things of the same colour (a green glove next to a green toy will
+fight it). Calibration learns whatever colour is in the box and centres its
 hue, so a green, blue or red glove is tracked like skin, and a glove that differs from your skin
 and the room is often easier to track. Grey, black or white gloves can't be tracked, since they
 have no hue. The baseline tracker (`b`) uses fixed skin thresholds, so it only works on bare
@@ -115,7 +117,7 @@ life when a ball reaches the bottom or when you touch a spike.
 | E4 | back-projection | `P(hand \| colour)` from hand vs background histograms |
 | E5 | YCrCb | Cr/Cb gate as a second check |
 | E6 | open/close | elliptical opening, then closing, then hole filling |
-| E7 | face + scoring | mean-shift face removal; blobs ranked by size, motion and track proximity |
+| E7 | blob scoring | blobs ranked by size, motion and track proximity |
 | E8 | palm geometry | distance-transform palm centre, forearm cut, finger count |
 | E9 | temporal | Kalman per hand, One Euro smoothing, two-hand assignment, adaptive histogram |
 

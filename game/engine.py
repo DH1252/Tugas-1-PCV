@@ -432,9 +432,7 @@ class Game:
         if self.calib_phase == "wait" and self.g["calib_manual"]:
             render.text(img, "Press SPACE to capture.  Drag the mouse to draw a new box, r to reset it.",
                         (w // 2, 72), 0.5, render.GREY, 1, center=True)
-            render.text(img, "Keep your face in view", (w // 2, 96), 0.5, render.GREY, 1, center=True)
         elif self.calib_phase == "wait":
-            render.text(img, "Keep your face in view", (w // 2, 72), 0.6, render.GREY, 1, center=True)
             left = max(0.0, self.g["calib_countdown"] - self.phase_t)
             render.text(img, str(int(np.ceil(left))), (x + bw // 2, y - 16), 1.2, render.YELLOW, 3, center=True)
         else:

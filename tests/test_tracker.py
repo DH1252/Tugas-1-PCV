@@ -4,14 +4,14 @@ import pytest
 from vision.calibration import CalibrationError
 from vision.tracker import ENHANCEMENTS, HandTracker, cumulative, preset
 
-from .synth import calibration_frames, make_frame
+from .synth import GLOVE, calibration_frames, make_frame
 
 FACE = (320, 110)
 
 
-def calibrated(cfg, kind="enhanced", hands=1, toggles=None):
+def calibrated(cfg, kind="enhanced", hands=1, toggles=None, face=FACE):
     tr = HandTracker(cfg, hands=hands, toggles=toggles or preset(kind))
-    frames, _ = calibration_frames(cfg, face=FACE)
+    frames, _ = calibration_frames(cfg, face=face)
     for f in frames:
         tr.add_calibration_frame(f)
     tr.finish_calibration((640, 480))
@@ -22,12 +22,9 @@ def path(i):
     return 200 + 4 * i, 300 - 2 * i
 
 
-def test_calibration_finds_skin_box_and_face(cfg):
-    tr = calibrated(cfg)
-    m = tr.model
+def test_calibration_centres_hue(cfg):
+    m = calibrated(cfg).model
     assert m.lo[0] <= 90 <= m.hi[0]
-    x, y, w, h = m.face_box
-    assert abs((x + w / 2) / cfg["vision"]["scale"] - FACE[0]) < 10
 
 
 def test_calibration_rejects_grey_box(cfg):
@@ -38,14 +35,12 @@ def test_calibration_rejects_grey_box(cfg):
         tr.finish_calibration((640, 480))
 
 
-def test_enhanced_tracks_palm_not_face(cfg):
-    tr = calibrated(cfg)
+def test_enhanced_tracks_bare_palm(cfg):
+    tr = calibrated(cfg, face=None)
     errors = []
     for i in range(60):
         x, y = path(i)
-        states = tr.process(make_frame([(x, y)], face=FACE, seed=100 + i), i / 30)
-        for s in states:
-            assert np.hypot(s.palm[0] - FACE[0], s.palm[1] - FACE[1]) > 80
+        states = tr.process(make_frame([(x, y)], face=None, seed=100 + i), i / 30)
         if states:
             errors.append(np.hypot(states[0].palm[0] - x, states[0].palm[1] - y))
     assert len(errors) >= 55
@@ -55,25 +50,29 @@ def test_enhanced_tracks_palm_not_face(cfg):
 def test_enhanced_beats_baseline(cfg):
     medians = {}
     for kind in ("baseline", "enhanced"):
-        tr = calibrated(cfg, kind)
+        tr = calibrated(cfg, kind, face=None)
         errs = []
         for i in range(40):
             x, y = path(i)
-            states = tr.process(make_frame([(x, y)], face=FACE, seed=200 + i), i / 30)
+            states = tr.process(make_frame([(x, y)], face=None, seed=200 + i), i / 30)
             if states:
                 errs.append(np.hypot(states[0].palm[0] - x, states[0].palm[1] - y))
         medians[kind] = np.median(errs)
     assert medians["enhanced"] < 0.5 * medians["baseline"]
 
 
-def test_baseline_mistakes_face_for_second_hand(cfg):
+def test_glove_avoids_face_baseline_does_not(cfg):
     tr = calibrated(cfg, "baseline", hands=2)
     states = tr.process(make_frame([(150, 330)], face=FACE), 0.0)
     assert any(np.hypot(s.palm[0] - FACE[0], s.palm[1] - FACE[1]) < 40 for s in states)
 
-    tr = calibrated(cfg, "enhanced", hands=2)
+    tr = HandTracker(cfg, hands=2)
+    frames, _ = calibration_frames(cfg, face=FACE, color=GLOVE)
+    for f in frames:
+        tr.add_calibration_frame(f)
+    tr.finish_calibration((640, 480))
     for i in range(5):
-        states = tr.process(make_frame([(150, 330)], face=FACE, seed=i), i / 30)
+        states = tr.process(make_frame([{"center": (150, 330), "color": GLOVE}], face=FACE, seed=i), i / 30)
     assert len(states) == 1
 
 
