@@ -2,6 +2,7 @@ camera:
   index: 0
   backend: msmf
   fourcc: MJPG
+  fps: 60
   stall_timeout: 2.0
   read_timeout: 1.0
   probe_timeout: 4.0
@@ -13,6 +14,7 @@ camera:
   lock_auto: false
 
 display:
+  fps: 60
   scale: 1.5
 
 vision:
@@ -89,7 +91,7 @@ physics:
   min_up_speed: 600
   max_speed: 1500
   max_hand_speed: 2500
-  substeps: 4
+  substeps: 3
   hit_cooldown: 0.15
 
 game:
@@ -112,6 +114,7 @@ game:
   gesture_hold: 1.0
   pause_dwell: 1.0
   auto_pause: 1.5
+  max_extrapolate: 0.05
   calib_manual: true
   calib_countdown: 3.0
   practice_seconds: 120

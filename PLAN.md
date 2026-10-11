@@ -59,7 +59,17 @@ developer working about 2 weeks. Adjust §8 if the deadline or team size differs
    Gravity rises 5% every 30 s, and heavy and spike items become more common.
 
 ### Physics (in the 854×480 game space, scaled up for display)
-- Integration is time-based (`dt`), so the game speed doesn't depend on frame rate.
+- **Engine:** pymunk (Chipmunk2D). Items are dynamic circle bodies with per-item gravity, drag
+  and elasticity; walls are static segments; each hand is a kinematic circle body moved to the
+  tracked palm every substep, so pymunk works out the bounce, including the hand's own speed.
+  A collision callback records hits, applies the minimum upward speed, and turns spike and star
+  contacts into touch events with no bounce. Balls also bounce off each other.
+- **60 fps:** the game ticks at 60 fps (`display.fps`, `--fps`). The camera is read on its own
+  thread at 60 or 30 fps (`camera.fps`, `--camera-fps`). The tracker runs only when a new camera
+  frame arrives; on the ticks in between, hands are moved ahead along their Kalman velocity
+  (at most 50 ms). Physics uses 3 substeps per tick (180 Hz).
+- The notes below describe the original hand-written physics; the rules (restitution, minimum
+  upward speed, speed caps, substeps) carry over to the pymunk version.
 - **Hand–ball collision.** Let n be the unit vector from the hand centre to the ball centre,
   u the hand velocity and v the ball velocity. When the ball overlaps the paddle and is moving
   toward it relative to the hand ((v − u)·n < 0):

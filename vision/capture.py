@@ -32,6 +32,8 @@ def open_camera(cam):
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam.get("capture_width", cam["width"]))
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam.get("capture_height", cam["height"]))
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    if cam.get("fps"):
+        cap.set(cv2.CAP_PROP_FPS, cam["fps"])
     return cap
 
 
@@ -132,6 +134,7 @@ class Source:
         self.is_file = video is not None
         self.mirror = cam["mirror"] and not self.is_file
         self.index = 0
+        self.ended = False
         self.restarts = 0
         self.locked = False
         if self.is_file:
@@ -223,16 +226,36 @@ class Source:
         deadline = time.perf_counter() + self.wait
         with self.cond:
             while self.seq == self.seen:
-                if self.stalled:
-                    self.restarts += 1
-                    print(f"camera stalled, reopening (#{self.restarts})", file=sys.stderr)
-                    self._start_reader()
+                self._restart_if_stalled()
                 left = deadline - time.perf_counter()
                 if left <= 0:
                     break
                 self.cond.wait(min(left, 0.05))
             self.seen = self.seq
             return None if self.frame is None else self.frame.copy()
+
+    def _restart_if_stalled(self):
+        if self.stalled:
+            self.restarts += 1
+            print(f"camera stalled, reopening (#{self.restarts})", file=sys.stderr)
+            self._start_reader()
+
+    def poll(self, t=None):
+        if self.is_file:
+            if t is not None and self.index / self.fps > t:
+                return None
+            ok, frame = self.cap.read()
+            if not ok:
+                self.ended = True
+                return None
+            return self._finish(frame)
+        with self.cond:
+            self._restart_if_stalled()
+            if self.seq == self.seen or self.frame is None:
+                return None
+            self.seen = self.seq
+            frame = self.frame.copy()
+        return self._finish(frame)
 
     def read(self):
         if self.is_file:
@@ -243,6 +266,9 @@ class Source:
             frame = self._latest()
             if frame is None:
                 return None
+        return self._finish(frame)
+
+    def _finish(self, frame):
         if (frame.shape[1], frame.shape[0]) != self.size:
             frame = cv2.resize(fit_aspect(frame, self.size), self.size, interpolation=cv2.INTER_AREA)
         if self.mirror:
@@ -254,6 +280,7 @@ class Source:
         if self.is_file:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             self.index = 0
+            self.ended = False
 
     def lock_auto(self):
         if not self.is_file:

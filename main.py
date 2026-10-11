@@ -58,6 +58,8 @@ def main():
     ap.add_argument("--recalibrate", action="store_true", help="ignore the saved calibration")
     add_resolution_args(ap)
     ap.add_argument("--camera", type=int, help="camera index (see --list-cameras)")
+    ap.add_argument("--fps", type=int, help="game frame rate (default 60)")
+    ap.add_argument("--camera-fps", type=int, help="frame rate to request from the camera, e.g. 60 or 30")
     ap.add_argument("--list-cameras", action="store_true")
     ap.add_argument("--config")
     args = ap.parse_args()
@@ -72,6 +74,10 @@ def main():
         return
     if args.camera is not None:
         cfg["camera"]["index"] = args.camera
+    if args.camera_fps:
+        cfg["camera"]["fps"] = args.camera_fps
+    if args.fps:
+        cfg["display"]["fps"] = args.fps
     try:
         apply_resolution(cfg, args.resolution, args.frame)
     except ValueError as e:
@@ -86,17 +92,25 @@ def main():
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW, int(src.size[0] * scale), int(src.size[1] * scale))
     cv2.setMouseCallback(WINDOW, lambda event, x, y, flags, param: game.on_mouse(event, x, y))
-    delay = max(1, int(1000 / src.fps)) if src.is_file else 1
-    key, trackbars = -1, False
+    tick = 1.0 / cfg["display"]["fps"]
+    key, trackbars, frame = -1, False, None
+    start = time.perf_counter()
     while not game.quit:
-        frame = src.read()
-        if frame is None:
-            if args.video and args.loop:
+        now = time.perf_counter()
+        t = now - start
+        new = src.poll(t)
+        if src.ended:
+            if args.loop:
                 src.rewind()
+                start = time.perf_counter()
                 continue
             break
-        t = src.index / src.fps if src.is_file else time.perf_counter()
-        view, debug_view = game.step(frame, t, key)
+        if new is not None:
+            frame = new
+        if frame is None:
+            cv2.waitKey(2)
+            continue
+        view, debug_view = game.step(frame, t, key, fresh=new is not None)
         cv2.imshow(WINDOW, view)
         if debug_view is not None:
             if not trackbars:
@@ -111,7 +125,7 @@ def main():
         elif trackbars:
             cv2.destroyWindow(DEBUG_WINDOW)
             trackbars = False
-        key = cv2.waitKey(delay)
+        key = cv2.waitKey(max(1, int((tick - (time.perf_counter() - now)) * 1000)))
         key = -1 if key < 0 else key & 0xFF
         if key == ord("k") and not src.is_file:
             current = src.cam["index"]

@@ -159,3 +159,36 @@ def test_drag_sample_box(cfg):
     assert game.sample_box == (100, 300, 60, 80)
     game.step(make_frame([]), 1.0, ord("r"))
     assert game.sample_box == game.tracker.calib_box(game.size)
+
+
+def test_ticks_between_camera_frames_extrapolate(cfg, tmp_path):
+    game, player = start(cfg, tmp_path)
+    player.step(13)
+    player.step(13)
+    assert game.state == "PLAY"
+    for _ in range(5):
+        player.hand += (6, 0)
+        player.step()
+    base = game.hands[0].palm[0]
+    frame = make_frame([tuple(player.hand)], seed=0)
+    calls = []
+    real = game.tracker.process
+    game.tracker.process = lambda *a: calls.append(1) or real(*a)
+    game.step(frame, player.t + 1 / 60, fresh=False)
+    assert not calls
+    assert game.hands and game.hands[0].palm[0] > base
+
+
+def test_play_at_60_with_camera_at_30(cfg, tmp_path):
+    game, player = start(cfg, tmp_path)
+    player.step(13)
+    player.step(13)
+    frame = None
+    for i in range(60 * 10):
+        if i % 2 == 0:
+            player.chase()
+            frame = make_frame([tuple(player.hand)], seed=i)
+        game.step(frame, player.t, fresh=i % 2 == 0)
+        player.t += 1 / 60
+    assert game.hits > 3
+    assert 50 < game.fps < 70 and 25 < game.cam_fps < 35

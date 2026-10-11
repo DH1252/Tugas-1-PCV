@@ -25,6 +25,8 @@ python main.py --list-cameras      # show available camera indices
 python main.py --camera 1          # use a specific camera (also: camera.index in config.yaml)
 python main.py --resolution 1080p  # camera capture size: 480p, 720p, 1080p or WxH (default 1280x720)
 python main.py --frame 1280x720    # tracking/game size (default: 480 high, same aspect as the capture)
+python main.py --camera-fps 30     # if your camera can't do 60 fps (default asks for 60)
+python main.py --fps 60            # game frame rate (default 60)
 ```
 
 A bigger `--frame` gives a sharper picture but costs more tracking time (it scales with the
@@ -93,6 +95,11 @@ Calibration tips:
 | `1`–`9` | Toggle enhancement E1–E9 |
 | `d` | Debug window |
 | `q` / `Esc` | Quit |
+
+The game runs at 60 fps whatever the camera does. Camera frames arrive at 60 or 30 fps on a
+background thread; the hand tracker runs on each new frame, and between frames the hands are
+moved ahead along their measured speed, so the paddles stay smooth. The status line shows both
+rates (`60 fps  cam 30`). Physics uses [pymunk](https://www.pymunk.org/).
 
 Items: **ball** (normal), **balloon** (slow and floaty), **heavy** (needs a firm swat),
 **spike** (don't touch it, let it fall), **star** (touch it for a life or points). You lose a

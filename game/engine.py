@@ -1,5 +1,6 @@
 import csv
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -8,8 +9,9 @@ import numpy as np
 from vision.calibration import CalibrationError
 from vision.tracker import ENHANCEMENTS, NAMES, HandTracker, preset
 
-from . import physics, render
+from . import render
 from .entities import Paddle
+from .physics import World
 from .spawner import Spawner
 from .ui import Button, DwellMenu, GestureHold
 
@@ -39,6 +41,9 @@ class Game:
         self.last_t = None
         self.now = 0.0
         self.fps = 0.0
+        self.cam_fps = 0.0
+        self.track_t = None
+        self.world = None
         self.quit = False
         self.hands = []
         self.paddles = []
@@ -97,7 +102,7 @@ class Game:
     def _toast(self, msg, seconds=2.0):
         self.toast_text, self.toast_until = msg, self.now + seconds
 
-    def step(self, frame, t, key=-1):
+    def step(self, frame, t, key=-1, fresh=True):
         if self.size is None:
             self.size = (frame.shape[1], frame.shape[0])
             if self.state == "MENU" and not self.tracker.matches(frame):
@@ -108,15 +113,23 @@ class Game:
         if self.last_t is not None and t > self.last_t:
             inst = 1.0 / (t - self.last_t)
             self.fps = inst if self.fps == 0 else 0.9 * self.fps + 0.1 * inst
-        dt = 1 / 30 if self.last_t is None else min(max(t - self.last_t, 0.0), 0.05)
+        dt = 1 / 60 if self.last_t is None else min(max(t - self.last_t, 0.0), 0.05)
         self.last_t = self.now = t
         self._key(key)
 
         if self.state == "CALIBRATE" and self.calib_phase == "sample":
-            self.tracker.add_calibration_frame(frame)
+            if fresh:
+                self.tracker.add_calibration_frame(frame)
             self.hands = []
+        elif fresh:
+            if self.track_t is not None and t > self.track_t:
+                inst = 1.0 / (t - self.track_t)
+                self.cam_fps = inst if self.cam_fps == 0 else 0.9 * self.cam_fps + 0.1 * inst
+            self.measured = self.tracker.process(frame, t)
+            self.track_t = t
+            self.hands = self.measured
         else:
-            self.hands = self.tracker.process(frame, t)
+            self.hands = self._extrapolate(t)
         self.paddles = self._paddles()
         getattr(self, HANDLERS[self.state])(dt)
         self.prev_pos = {h.id: np.array(h.palm, float) for h in self.hands}
@@ -128,6 +141,16 @@ class Game:
         self._draw(view)
         debug_view = render.debug_grid(self.tracker.debug, self.tracker.timings, self._tune_info()) if self.debug else None
         return view, debug_view
+
+    def _extrapolate(self, t):
+        if self.track_t is None:
+            return []
+        ahead = min(max(t - self.track_t, 0.0), self.g["max_extrapolate"])
+        out = []
+        for h in getattr(self, "measured", []):
+            vx, vy = h.velocity
+            out.append(replace(h, palm=(h.palm[0] + vx * ahead, h.palm[1] + vy * ahead)))
+        return out
 
     def _tune_info(self):
         t = self.tracker
@@ -280,6 +303,8 @@ class Game:
         self.streak = self.longest = self.hits = self.drops = 0
         self.play_time = 0.0
         self.spawner = Spawner(self.cfg, self.rng, practice)
+        self.world = World(self.p, self.size)
+        self.items = self.world.items
         self._enter("PLAY")
 
     def _pause(self, reason="Paused"):
@@ -295,11 +320,11 @@ class Game:
         if self.pause_button.update(self._points(), dt):
             self._pause()
             return
-        self.items += self.spawner.update(dt, self.items, self.size[0])
-        events = physics.step(self.items, self.paddles, dt, self.p, self.size, self.spawner.gravity_mult())
-        for kind, item in events:
+        for item in self.spawner.update(dt, self.items, self.size[0]):
+            self.world.add(item)
+        self.world.set_gravity_mult(self.spawner.gravity_mult())
+        for kind, item in self.world.step(dt, self.paddles):
             self._event(kind, item)
-        self.items = [it for it in self.items if it.alive]
         self.popups = [p for p in self.popups if p[2] > self.now]
         if self.practice and self.play_time >= self.g["practice_seconds"]:
             self._log_practice()
@@ -384,7 +409,7 @@ class Game:
         render.paddle_outline(img, self.hands, self.debug)
         render.confidence_bars(img, self.hands, (w - 112, 14))
         on = "".join(k[1] if self.tracker.toggles[k] else "." for k in ENHANCEMENTS)
-        render.text(img, f"{self.tracker.label}  E[{on}]  {self.tracker.hands} hand  {self.fps:.0f} fps",
+        render.text(img, f"{self.tracker.label}  E[{on}]  {self.tracker.hands} hand  {self.fps:.0f} fps  cam {self.cam_fps:.0f}",
                     (10, h - 12), 0.45, render.GREY, 1)
         if self.now < self.toast_until:
             render.text(img, self.toast_text, (w // 2, h - 44), 0.7, render.YELLOW, 2, center=True)

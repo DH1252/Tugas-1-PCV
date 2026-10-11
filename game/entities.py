@@ -1,11 +1,11 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
 KEEP_UP = ("ball", "balloon", "heavy")
 
 
-@dataclass
+@dataclass(eq=False)
 class Item:
     kind: str
     pos: np.ndarray
@@ -17,6 +17,8 @@ class Item:
     cooldown: float = 0.0
     alive: bool = True
     hue: int = 0
+    body: object = field(default=None, repr=False, compare=False)
+    shape: object = field(default=None, repr=False, compare=False)
 
     @property
     def keep_up(self):

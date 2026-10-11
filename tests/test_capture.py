@@ -125,3 +125,14 @@ def test_fit_aspect_crops_centre():
     wide = np.zeros((720, 1280, 3), np.uint8)
     assert capture.fit_aspect(wide, (640, 480)).shape[:2] == (720, 960)
     assert capture.fit_aspect(wide, (854, 480)) is wide
+
+
+def test_poll_is_non_blocking(fake):
+    src = capture.Source(fake)
+    time.sleep(0.05)
+    assert src.poll() is not None
+    t0 = time.perf_counter()
+    results = [src.poll() for _ in range(50)]
+    assert time.perf_counter() - t0 < 0.5
+    assert any(r is None for r in results)
+    src.release()
