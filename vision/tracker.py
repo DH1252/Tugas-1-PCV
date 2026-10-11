@@ -144,7 +144,7 @@ class HandTracker:
     def param(self, key):
         if self.auto_tune and key in self.tuned and key not in self.overrides:
             if key == "v_min":
-                return max(15, int(self.tuned[key] * min(1.0, self.v_ratio)))
+                return max(self.v["v_abs_min"], int(self.tuned[key] * min(1.0, self.v_ratio)))
             return self.tuned[key]
         return self.v[key]
 
@@ -282,6 +282,8 @@ class HandTracker:
                     blob = self._propagate(tr, blob, dt)
                     band = v["top_band"] * np.sqrt(tr.area)
                 c.point = hand.top_point(blob, c.bbox, band) or c.center
+                if tr is None:
+                    c.extra["top"] = (blob, band)
         if T["E7"]:
             segmentation.score_candidates(cands, prob, motion, preds, tc["gate"] * v["scale"], v["score_weights"])
             cands.sort(key=lambda c: -c.score)
@@ -307,6 +309,13 @@ class HandTracker:
                     if tr is not None:
                         near = tuple(tr.pred * v["scale"])
                 hand.measure(c, dist, light, v, near, tc["gate"] * v["scale"] * 0.5)
+                if top_anchor and c.radius > 0 and "top" in c.extra:
+                    blob, band = c.extra["top"]
+                    cx, cy, r = c.center[0], c.center[1], c.radius
+                    reach = np.zeros_like(blob)
+                    reach[max(0, int(cy - v["top_reach"] * r)):int(cy + r) + 1,
+                          max(0, int(cx - v["top_side"] * r)):int(cx + v["top_side"] * r) + 1] = 255
+                    c.point = hand.top_point(cv2.bitwise_and(blob, reach), c.bbox, band) or c.point
         self._lap("contours", clock)
 
         states, used = self._track(cands, t, dt, inv) if T["E9"] else self._raw(cands, dt, inv)
@@ -354,7 +363,7 @@ class HandTracker:
         tc = self.tc
         centers = [((c.point or c.center)[0] * inv, (c.point or c.center)[1] * inv) for c in cands]
         cost = [[float(np.hypot(tr.pred[0] - x, tr.pred[1] - y)) for x, y in centers] for tr in self.tracks]
-        gates = [tc["gate"] * (1 + 0.5 * tr.missed) for tr in self.tracks]
+        gates = [tc["gate"] * min(1 + 0.5 * tr.missed, tc["gate_growth_max"]) for tr in self.tracks]
         pairs = self._drop_spikes(assign(cost, gates), cost, centers, t, dt)
         matched_t = {i for i, _ in pairs}
         matched_c = {j for _, j in pairs}
@@ -387,6 +396,8 @@ class HandTracker:
         for j, c in enumerate(cands):
             if j in matched_c or len(self.tracks) >= self.hands:
                 continue
+            if self.toggles["E7"] and c.border and c.motion < tc["static_motion"] and not self._near_calibration(c):
+                continue
             tr = Track(self.next_id, centers[j], t, tc)
             self.next_id += 1
             tr.radius = self._paddle(c, inv)
@@ -400,6 +411,13 @@ class HandTracker:
                             tr.conf, tr.missed == 0 and tr.merged == 0, tr.raw, tr.contour)
                   for tr in self.tracks if tr.confirmed]
         return states, used
+
+    def _near_calibration(self, cand):
+        if self.calib_roi is None or self.frame_count > self.tc["birth_grace"]:
+            return False
+        x, y, w, h = self.calib_roi
+        cx, cy = cand.center
+        return x - w <= cx <= x + 2 * w and y - h <= cy <= y + 2 * h
 
     def _grown_from(self, cand):
         if not self.tracks:
@@ -478,12 +496,16 @@ class HandTracker:
         busiest = max((cands[m].motion for m in moving), default=0.0)
         for i, j in list(pairs):
             tr, c = self.tracks[i], cands[j]
-            stuck = c.motion < tc["static_motion"] or c.motion < tc["static_ratio"] * busiest
-            tr.static = tr.static + 1 if stuck else max(0, tr.static - 2)
-            if not tr.confirmed or tr.static < tc["static_frames"] or not moving:
+            rivals = [m for m in range(len(cands)) if m not in matched_c and
+                      cands[m].intrinsic > c.intrinsic + tc["rival_margin"]]
+            better = moving if c.motion < tc["static_motion"] or c.motion < tc["static_ratio"] * busiest else []
+            better = sorted(set(better) | set(rivals))
+            tr.static = tr.static + 1 if better else max(0, tr.static - 2)
+            if not tr.confirmed or tr.static < tc["static_frames"] or not better:
                 continue
-            k = max(moving, key=lambda m: cands[m].score)
-            moving.remove(k)
+            k = max(better, key=lambda m: cands[m].intrinsic)
+            if k in moving:
+                moving.remove(k)
             at = cands[k].point or cands[k].center
             new = Track(self.next_id, (at[0] * inv, at[1] * inv), t, tc)
             self.next_id += 1

@@ -137,6 +137,12 @@ back to the palm centre (the ring then works best with `tracking.paddle_scale: 2
   frame confirms it.
 - **Hand leaving the view:** the cursor no longer flies off. Its predicted motion slows down
   while the hand is missing and is kept inside the frame.
+- **Wrong lock:** a coasting track's search radius stops widening at 1.5×, so a lost hand
+  can't jump to a far-away blob. Still blobs touching the top, left or right edge can't
+  start a track. If a clearly better blob (bigger, not on the edge) sits next to the tracked
+  one for about 0.7 s, the tracker switches to it, even if both are still.
+- **Dark areas:** pixels darker than V = 35 are never treated as glove, because their hue is
+  noise.
 - **Touching a look-alike:** when the glove touches another glove-coloured object, the
   previous frame's glove mask is shifted by the hand's speed and used to keep only the glove's
   part of the merged blob.

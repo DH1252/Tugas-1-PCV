@@ -82,3 +82,37 @@ def test_inner_region_maps_to_full_screen(cfg_top):
     assert np.allclose(at((1 - mx) * w, (1 - my) * h), (w - 1, h - 1), atol=1)
     assert np.allclose(at(w / 2, h / 2), (w / 2, h / 2))
     assert at(-50, 2 * h) == (0.0, h - 1)
+
+
+def with_corner(points, seed=0):
+    img = frame(points)
+    cv2.rectangle(img, (720, 0), (854, 110), GLOVE, -1)
+    return img
+
+
+def test_static_corner_blob_is_not_tracked(cfg_top):
+    tr = calibrated(cfg_top)
+    for i in range(30):
+        states = tr.process(with_corner([]), i / 30)
+    assert states == []
+
+
+def test_lost_hand_does_not_jump_to_far_blob(cfg_top):
+    tr = calibrated(cfg_top)
+    for i in range(10):
+        tr.process(with_corner([(400, 330)]), i / 30)
+    for i in range(10, 20):
+        for s in tr.process(with_corner([]), i / 30):
+            assert s.palm[0] < 650
+
+
+def test_still_glove_takes_over_from_wrong_lock(cfg_top):
+    from vision.filters import Track
+    tr = calibrated(cfg_top)
+    tr.process(with_corner([]), 0.0)
+    wrong = Track(99, (785, 11), 0.0, cfg_top["tracking"])
+    wrong.confirmed, wrong.area = True, 3000.0
+    tr.tracks = [wrong]
+    for i in range(1, 40):
+        states = tr.process(with_corner([(400, 330)]), i / 30)
+    assert states and abs(states[0].palm[0] - 400) < 30

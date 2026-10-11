@@ -89,6 +89,8 @@ class Candidate:
     mean_prob: float = 1.0
     motion: float = 0.0
     proximity: float = 0.0
+    border: bool = False
+    intrinsic: float = 0.0
     score: float = 0.0
     conf: float = 1.0
     extra: dict = field(default_factory=dict)
@@ -125,7 +127,10 @@ def score_candidates(cands, prob, motion, predictions, gate, weights):
     if not cands:
         return
     largest = max(c.area for c in cands)
+    h, w = prob.shape
     for c in cands:
+        x, y, bw, bh = c.bbox
+        c.border = x <= 1 or y <= 1 or x + bw >= w - 1
         blob = blob_mask(c, prob.shape)
         c.mean_prob = cv2.mean(prob, mask=blob)[0] / 255.0
         c.motion = cv2.mean(motion, mask=blob)[0] / 255.0 if motion is not None else 0.0
@@ -133,5 +138,6 @@ def score_candidates(cands, prob, motion, predictions, gate, weights):
             at = c.point or c.center
             d = min(np.hypot(at[0] - p[0], at[1] - p[1]) for p in predictions)
             c.proximity = float(np.exp(-(d / gate) ** 2))
-        c.score = (weights["size"] * c.area / largest + weights["motion"] * c.motion
-                   + weights["proximity"] * c.proximity)
+        edge = weights["border"] if c.border else 0.0
+        c.intrinsic = weights["size"] * c.area / largest + weights["motion"] * c.motion - edge
+        c.score = c.intrinsic + weights["proximity"] * c.proximity

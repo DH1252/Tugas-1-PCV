@@ -29,6 +29,7 @@ vision:
   v_min: 40
   v_floor_ratio: 0.4
   v_floor_max: 110
+  v_abs_min: 35
   v_max: 250
   baseline_lo: [0, 48, 80]
   baseline_hi: [20, 255, 255]
@@ -68,10 +69,12 @@ vision:
   max_area: 0.4
   min_solidity: 0.45
   motion_thresh: 40
-  score_weights: {size: 1.0, motion: 0.5, proximity: 1.0}
+  score_weights: {size: 1.0, motion: 0.5, proximity: 1.0, border: 0.3}
   palm_top_bias: 0.15
   cursor_anchor: top
   top_band: 0.2
+  top_reach: 3.2
+  top_side: 2.5
   core_min_share: 0.3
   arm_cut: 3.0
   wrist_cut: 1.3
@@ -81,6 +84,7 @@ vision:
 
 tracking:
   gate: 100
+  gate_growth_max: 1.5
   max_coast: 5
   coast_damping: 0.5
   relax_after: 15
@@ -92,6 +96,8 @@ tracking:
   spike_speed: 0.5
   static_motion: 0.25
   static_ratio: 0.5
+  rival_margin: 0.3
+  birth_grace: 15
   moving_motion: 0.4
   birth: 3
   accel_noise: 2000
