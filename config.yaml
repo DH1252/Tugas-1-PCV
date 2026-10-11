@@ -21,6 +21,7 @@ vision:
   wb_clip: [0.7, 1.4]
   wb_smooth: 0.1
   hue_shift: 20
+  auto_hue_shift: true
   s_min: 30
   v_min: 40
   v_max: 250
@@ -106,6 +107,7 @@ game:
   gesture_hold: 1.0
   pause_dwell: 1.0
   auto_pause: 1.5
+  calib_manual: true
   calib_countdown: 3.0
   practice_seconds: 120
   practice_gravity: 0.6

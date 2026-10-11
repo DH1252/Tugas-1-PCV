@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 
 from eval import evaluate
@@ -38,7 +39,11 @@ def start(cfg, tmp_path, debug=False):
     game = Game(cfg, debug=debug, calibration_path=tmp_path / "calib.npz", log_path=tmp_path / "log.csv", seed=3)
     _, center = calibration_frames(cfg, n=1)
     player = Player(game, center)
-    for _ in range(int(cfg["game"]["calib_countdown"] * 30) + cfg["vision"]["calib_frames"] + 10):
+    for _ in range(5):
+        player.step()
+    assert game.calib_phase == "wait"
+    player.step(32)
+    for _ in range(cfg["vision"]["calib_frames"] + 10):
         player.step()
     return game, player
 
@@ -124,3 +129,33 @@ def test_evaluate_harness(cfg, tmp_path):
     assert "| baseline |" in text and "| +E9 |" in text
     rows = (tmp_path / "out" / "results.csv").read_text().splitlines()
     assert len(rows) == 1 + 1 + len(evaluate.ENHANCEMENTS)
+
+
+def test_calibration_waits_for_space(cfg, tmp_path):
+    game = Game(cfg, calibration_path=None, log_path=None)
+    _, center = calibration_frames(cfg, n=1)
+    player = Player(game, center)
+    for _ in range(200):
+        player.step()
+    assert game.state == "CALIBRATE" and game.calib_phase == "wait"
+
+
+def test_auto_countdown_option(cfg):
+    cfg["game"]["calib_manual"] = False
+    game = Game(cfg, calibration_path=None, log_path=None)
+    _, center = calibration_frames(cfg, n=1)
+    player = Player(game, center)
+    for _ in range(int(cfg["game"]["calib_countdown"] * 30) + cfg["vision"]["calib_frames"] + 10):
+        player.step()
+    assert game.calib_phase == "review"
+
+
+def test_drag_sample_box(cfg):
+    game = Game(cfg, calibration_path=None, log_path=None)
+    Player(game, (100, 100)).step()
+    game.on_mouse(cv2.EVENT_LBUTTONDOWN, 100, 300)
+    game.on_mouse(cv2.EVENT_MOUSEMOVE, 160, 380)
+    game.on_mouse(cv2.EVENT_LBUTTONUP, 160, 380)
+    assert game.sample_box == (100, 300, 60, 80)
+    game.step(make_frame([]), 1.0, ord("r"))
+    assert game.sample_box == game.tracker.calib_box(game.size)

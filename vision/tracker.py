@@ -7,7 +7,7 @@ from . import hand, segmentation
 from .calibration import CalibrationError, build_model, hs_hist
 from .face import FaceTracker
 from .filters import Track, assign
-from .preprocess import WhiteBalance, hue_lut, reliability_gate, rotate_hue, shift_box
+from .preprocess import WhiteBalance, centre_shift, hue_lut, reliability_gate, rotate_hue, shift_box
 from .state import HandState
 
 ENHANCEMENTS = tuple(f"E{i}" for i in range(1, 10))
@@ -46,7 +46,7 @@ class HandTracker:
         self.tc = cfg["tracking"]
         self.hands = hands
         self.toggles = preset("enhanced") if toggles is None else dict(toggles)
-        self.lut = hue_lut(self.v["hue_shift"])
+        self._set_shift(self.v["hue_shift"])
         self.wb = WhiteBalance(self.v["wb_clip"], self.v["wb_smooth"])
         self.motion = segmentation.Motion(self.v["motion_thresh"])
         self.calib_frames = []
@@ -87,7 +87,7 @@ class HandTracker:
             self.face = FaceTracker(self.model.face_box, self.v["face_max_jump"], self.v["face_max_shift"])
 
     def set_toggles(self, toggles):
-        rebuild = any(toggles[k] != self.toggles[k] for k in ("E1", "E2"))
+        rebuild = any(toggles[k] != self.toggles[k] for k in ("E1", "E2", "E3"))
         self.toggles = dict(toggles)
         if rebuild and self.calib_frames:
             try:
@@ -131,12 +131,19 @@ class HandTracker:
         self._build_model()
         self.reset()
 
+    def _set_shift(self, shift):
+        self.hue_shift = shift
+        self.lut = hue_lut(shift)
+
     def _build_model(self):
+        shift = None
+        if self.toggles["E3"] and self.v.get("auto_hue_shift", True):
+            shift = centre_shift(self.calib_frames, self.calib_roi, self.v["s_min"], self.v["v_min"])
+        self._set_shift(self.v["hue_shift"] if shift is None else shift)
         wb = WhiteBalance(self.v["wb_clip"], self.v["wb_smooth"])
         samples = [self._prepare(f, wb) for f in self.calib_frames]
-        shift = self.v["hue_shift"] if self.toggles["E2"] else 0
         self.model = None
-        self.model = build_model(samples, self.calib_roi, self.cfg, shift)
+        self.model = build_model(samples, self.calib_roi, self.cfg)
         self.adapted = False
 
     def _small(self, frame):
@@ -160,7 +167,7 @@ class HandTracker:
 
     def _fixed_box(self):
         lo, hi = self.v["baseline_lo"], self.v["baseline_hi"]
-        return shift_box(lo, hi, self.v["hue_shift"]) if self.toggles["E2"] else (lo, hi)
+        return shift_box(lo, hi, self.hue_shift) if self.toggles["E2"] else (lo, hi)
 
     def _lap(self, name, clock):
         now = time.perf_counter()

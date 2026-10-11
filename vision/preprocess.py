@@ -28,6 +28,21 @@ def hue_lut(shift):
     return lut.astype(np.uint8)
 
 
+def centre_shift(bgr_frames, roi, s_min, v_min):
+    x, y, w, h = roi
+    hues = []
+    for f in bgr_frames:
+        hsv = cv2.cvtColor(f[y:y + h, x:x + w], cv2.COLOR_BGR2HSV)
+        ok = (hsv[..., 1] >= s_min) & (hsv[..., 2] >= v_min)
+        hues.append(hsv[..., 0][ok])
+    hues = np.concatenate(hues) if hues else np.array([])
+    if len(hues) < 20:
+        return None
+    a = hues.astype(np.float64) * np.pi / 90
+    mean = np.degrees(np.arctan2(np.sin(a).mean(), np.cos(a).mean())) / 2
+    return int(round(90 - mean)) % 180
+
+
 def rotate_hue(hsv, lut):
     h, s, v = cv2.split(hsv)
     return cv2.merge([cv2.LUT(h, lut), s, v])

@@ -63,7 +63,7 @@ def core_mask(hsv, mask, bins, mass):
     return cv2.bitwise_and(core, mask)
 
 
-def build_model(samples, roi, cfg, hue_shift=0):
+def build_model(samples, roi, cfg):
     v = cfg["vision"]
     bins = (v["h_bins"], v["s_bins"])
     shape = samples[0]["hsv"].shape[:2]
@@ -82,10 +82,7 @@ def build_model(samples, roi, cfg, hue_shift=0):
     hsv_px = np.concatenate(hsv_px)
     crcb_px = np.concatenate(crcb_px)
     if len(hsv_px) < 0.3 * w * h * len(samples):
-        raise CalibrationError("not enough skin in the box")
-    loose = hsv_box(hsv_px.reshape(-1, 1, 3), ((160 + hue_shift) % 180, 15, 40), ((50 + hue_shift) % 180, 230, 255))
-    if np.count_nonzero(loose) < 0.5 * len(hsv_px):
-        raise CalibrationError("the box does not look like skin")
+        raise CalibrationError("the box is too grey or dark to track by colour")
 
     p_lo, p_hi = v["percentiles"]
     margin = np.array(v["box_margin"])

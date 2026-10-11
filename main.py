@@ -66,6 +66,7 @@ def main():
     scale = cfg["display"]["scale"]
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW, int(src.size[0] * scale), int(src.size[1] * scale))
+    cv2.setMouseCallback(WINDOW, lambda event, x, y, flags, param: game.on_mouse(event, x, y))
     delay = max(1, int(1000 / src.fps)) if src.is_file else 1
     key, trackbars = -1, False
     while not game.quit:

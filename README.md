@@ -27,9 +27,16 @@ python main.py --camera 1          # use a specific camera (also: camera.index i
 
 While playing, press `k` to switch to the next camera. Recalibrate (`c`) afterwards.
 
-On first start, the game asks you to fill the yellow box with your palm. Keep your face in
-view, because calibration also learns where your face is so it can ignore it. Then check that
-your hand shows green and the background stays dark. The calibration is saved to
+On first start, put your palm (or a gloved hand) in the yellow box and press **Space** to
+capture its colour. To sample a different area, drag a new box with the mouse first; `r` resets
+it. Keep your face in view, because calibration also learns where your face is so it can ignore
+it. Then check that your hand shows green and the background stays dark.
+
+Coloured gloves work too: calibration learns whatever colour is in the box and centres its
+hue, so a green, blue or red glove is tracked like skin, and a glove that differs from your skin
+and the room is often easier to track. Grey, black or white gloves can't be tracked, since they
+have no hue. The baseline tracker (`b`) uses fixed skin thresholds, so it only works on bare
+skin. The calibration is saved to
 `calibration.npz` and reused next time. Press `c` to redo it, or start with `--recalibrate`.
 
 The webcam opens through Media Foundation (`camera.backend: msmf` in `config.yaml`) at 1280×720 with
@@ -59,6 +66,8 @@ Calibration tips:
 | `p` | Pause / resume |
 | `t` (menu) | Practice |
 | `c` | Recalibrate |
+| `Space` (calibration) | Capture the colour in the box |
+| Mouse drag / `r` (calibration) | Draw a new sample box / reset it |
 | `b` | Switch baseline ↔ enhanced |
 | `h` | Switch one ↔ two hands |
 | `k` | Next camera |

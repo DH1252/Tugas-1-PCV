@@ -25,15 +25,15 @@ def path(i):
 def test_calibration_finds_skin_box_and_face(cfg):
     tr = calibrated(cfg)
     m = tr.model
-    assert m.lo[0] <= 33 <= m.hi[0]
+    assert m.lo[0] <= 90 <= m.hi[0]
     x, y, w, h = m.face_box
     assert abs((x + w / 2) / cfg["vision"]["scale"] - FACE[0]) < 10
 
 
-def test_calibration_rejects_empty_box(cfg):
+def test_calibration_rejects_grey_box(cfg):
     tr = HandTracker(cfg)
     for i in range(10):
-        tr.add_calibration_frame(make_frame([], seed=i))
+        tr.add_calibration_frame(make_frame([], background=(110, 110, 110), seed=i))
     with pytest.raises(CalibrationError):
         tr.finish_calibration((640, 480))
 
@@ -109,3 +109,22 @@ def test_save_and_load(cfg, tmp_path):
     other = HandTracker(cfg)
     other.load(tmp_path / "calib.npz")
     assert np.allclose(other.model.ratio, tr.model.ratio)
+
+
+@pytest.mark.parametrize("glove", [(60, 170, 60), (200, 60, 200), (40, 40, 200)])
+def test_tracks_coloured_glove(cfg, glove):
+    bx, by, bw, bh = cfg["vision"]["calib_box"]
+    center = ((bx + bw / 2) * 640, (by + bh / 2) * 480)
+    tr = HandTracker(cfg)
+    for i in range(cfg["vision"]["calib_frames"]):
+        tr.add_calibration_frame(make_frame([{"center": center, "color": glove}], face=FACE, seed=i))
+    tr.finish_calibration((640, 480))
+    errors = []
+    for i in range(40):
+        x, y = path(i)
+        states = tr.process(make_frame([{"center": (x, y), "color": glove}], face=FACE, seed=50 + i), i / 30)
+        for s in states:
+            assert np.hypot(s.palm[0] - FACE[0], s.palm[1] - FACE[1]) > 80
+        if states:
+            errors.append(np.hypot(states[0].palm[0] - x, states[0].palm[1] - y))
+    assert len(errors) >= 35 and np.median(errors) < 8

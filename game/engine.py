@@ -50,6 +50,8 @@ class Game:
         self.practice = False
         self.items = []
         self.state = "CALIBRATE"
+        self.sample_box = None
+        self.drag = None
         if load_calibration and self.calib_path and self.calib_path.exists():
             try:
                 self.tracker.load(self.calib_path)
@@ -100,6 +102,7 @@ class Game:
             self.size = (frame.shape[1], frame.shape[0])
             if self.state == "MENU" and not self.tracker.matches(frame):
                 self.state = "CALIBRATE"
+            self.sample_box = self.tracker.calib_box(self.size)
             self._layout()
             self._enter(self.state)
         if self.last_t is not None and t > self.last_t:
@@ -186,11 +189,15 @@ class Game:
                 self._enter("PLAY")
         elif ch == "r" and self.state == "CALIBRATE" and self.calib_phase == "review":
             self._enter("CALIBRATE")
+        elif ch == "r" and self.state == "CALIBRATE" and self.calib_phase == "wait":
+            self.sample_box = self.tracker.calib_box(self.size)
         elif ch == "t" and self.state == "MENU":
             self._start(practice=True)
         elif key in CONFIRM_KEYS:
             if self.state == "CALIBRATE" and self.calib_phase == "review":
                 self._review("ok")
+            elif self.state == "CALIBRATE" and self.calib_phase == "wait":
+                self._start_sampling()
             elif self.state == "MENU":
                 self._start(practice=False)
             elif self.state == "PAUSE":
@@ -198,14 +205,30 @@ class Game:
             elif self.state == "GAME_OVER":
                 self._start(self.practice)
 
+    def on_mouse(self, event, x, y):
+        if self.state != "CALIBRATE" or self.calib_phase != "wait":
+            return
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.drag = (x, y)
+        elif event in (cv2.EVENT_MOUSEMOVE, cv2.EVENT_LBUTTONUP) and self.drag:
+            x0, y0 = self.drag
+            box = (min(x0, x), min(y0, y), abs(x - x0), abs(y - y0))
+            if box[2] >= 12 and box[3] >= 12:
+                self.sample_box = box
+            if event == cv2.EVENT_LBUTTONUP:
+                self.drag = None
+
+    def _start_sampling(self):
+        self.calib_phase = "sample"
+        self.tracker.start_calibration()
+
     def _calibrate(self, dt):
         self.phase_t += dt
-        if self.calib_phase == "wait" and self.phase_t >= self.g["calib_countdown"]:
-            self.calib_phase = "sample"
-            self.tracker.start_calibration()
+        if self.calib_phase == "wait" and not self.g["calib_manual"] and self.phase_t >= self.g["calib_countdown"]:
+            self._start_sampling()
         elif self.calib_phase == "sample" and len(self.tracker.calib_frames) >= self.cfg["vision"]["calib_frames"]:
             try:
-                self.tracker.finish_calibration(self.size)
+                self.tracker.finish_calibration(self.size, self.sample_box)
                 self.calib_phase = "review"
                 self.review_menu.reset()
             except CalibrationError as e:
@@ -360,21 +383,25 @@ class Game:
 
     def _draw_calibrate(self, img):
         w, h = self.size
-        x, y, bw, bh = self.tracker.calib_box(self.size)
+        x, y, bw, bh = self.sample_box
         if self.calib_phase == "review":
             if self.tracker.mask is not None:
                 mask = cv2.resize(self.tracker.mask, self.size, interpolation=cv2.INTER_NEAREST) > 0
                 img[mask] = (0.5 * img[mask] + np.array([0, 120, 0])).clip(0, 255).astype(np.uint8)
-            render.text(img, "Your hand should be green, the background dark", (w // 2, 40), 0.65, center=True)
+            render.text(img, "Your hand or glove should be green, the rest dark", (w // 2, 40), 0.65, center=True)
             render.text(img, "Hover OK / Retry, or press Enter / r", (w // 2, 70), 0.55, render.GREY, 1, center=True)
             for b in self.review_menu.buttons:
                 render.draw_button(img, b)
             return
         color = render.YELLOW if self.calib_phase == "wait" else render.GREEN
         cv2.rectangle(img, (x, y), (x + bw, y + bh), color, 2)
-        render.text(img, "Fill the box with your palm", (w // 2, 40), 0.8, center=True)
-        render.text(img, "Keep your face in view", (w // 2, 72), 0.6, render.GREY, 1, center=True)
-        if self.calib_phase == "wait":
+        render.text(img, "Fill the box with your palm or glove", (w // 2, 40), 0.8, center=True)
+        if self.calib_phase == "wait" and self.g["calib_manual"]:
+            render.text(img, "Press SPACE to capture.  Drag the mouse to draw a new box, r to reset it.",
+                        (w // 2, 72), 0.5, render.GREY, 1, center=True)
+            render.text(img, "Keep your face in view", (w // 2, 96), 0.5, render.GREY, 1, center=True)
+        elif self.calib_phase == "wait":
+            render.text(img, "Keep your face in view", (w // 2, 72), 0.6, render.GREY, 1, center=True)
             left = max(0.0, self.g["calib_countdown"] - self.phase_t)
             render.text(img, str(int(np.ceil(left))), (x + bw // 2, y - 16), 1.2, render.YELLOW, 3, center=True)
         else:
