@@ -28,6 +28,12 @@ view, because calibration also learns where your face is so it can ignore it. Th
 your hand shows green and the background stays dark. The calibration is saved to
 `calibration.npz` and reused next time. Press `c` to redo it, or start with `--recalibrate`.
 
+The webcam opens through Media Foundation (`camera.backend: msmf` in `config.yaml`) with
+hardware transforms off and MJPG frames, which avoids the slow open and frozen feed that MSMF
+often has. Frames are read on a background thread. If the camera stops sending frames for 2 s,
+it is reopened automatically. Set `backend` to `dshow` or `auto` if your camera misbehaves with
+MSMF. On Linux and macOS, `msmf` falls back to the default backend.
+
 Calibration tips:
 - Use even, front-facing light. Avoid a bright window behind you.
 - Long sleeves help.

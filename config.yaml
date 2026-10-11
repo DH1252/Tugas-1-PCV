@@ -1,5 +1,10 @@
 camera:
   index: 0
+  backend: msmf
+  fourcc: MJPG
+  stall_timeout: 2.0
+  read_timeout: 1.0
+  open_timeout: 10.0
   width: 640
   height: 480
   mirror: true
