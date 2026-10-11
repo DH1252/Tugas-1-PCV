@@ -75,6 +75,20 @@ def list_cameras(cam, max_index=8):
     return found
 
 
+def fit_aspect(frame, size):
+    h, w = frame.shape[:2]
+    tw, th = size
+    if abs(w * th - h * tw) <= 0.01 * h * tw:
+        return frame
+    if w * th > h * tw:
+        cw = int(round(h * tw / th))
+        x = (w - cw) // 2
+        return frame[:, x:x + cw]
+    ch = int(round(w * th / tw))
+    y = (h - ch) // 2
+    return frame[y:y + ch]
+
+
 class Reader(threading.Thread):
     def __init__(self, cam, on_frame):
         super().__init__(daemon=True)
@@ -92,6 +106,7 @@ class Reader(threading.Thread):
             self.error = e
             return
         self.fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        self.actual = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
         while self.running:
             if self.lock_requested:
                 lock_auto(cap)
@@ -178,7 +193,9 @@ class Source:
         for attempt in attempts(cam):
             try:
                 self._try(attempt)
-                print(f"using {describe(attempt)}", file=sys.stderr)
+                w, h = getattr(self.reader, "actual", (0, 0))
+                print(f"using {describe(attempt)} at {w}x{h}, game frame {self.size[0]}x{self.size[1]}",
+                      file=sys.stderr)
                 return
             except RuntimeError as e:
                 errors.append(f"{describe(attempt)}: {e}")
@@ -227,7 +244,7 @@ class Source:
             if frame is None:
                 return None
         if (frame.shape[1], frame.shape[0]) != self.size:
-            frame = cv2.resize(frame, self.size, interpolation=cv2.INTER_AREA)
+            frame = cv2.resize(fit_aspect(frame, self.size), self.size, interpolation=cv2.INTER_AREA)
         if self.mirror:
             frame = cv2.flip(frame, 1)
         self.index += 1

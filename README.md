@@ -23,7 +23,15 @@ python main.py --debug             # pipeline stages + tuning sliders in a secon
 python main.py --video clip.avi    # replay a recorded clip instead of the webcam
 python main.py --list-cameras      # show available camera indices
 python main.py --camera 1          # use a specific camera (also: camera.index in config.yaml)
+python main.py --resolution 1080p  # camera capture size: 480p, 720p, 1080p or WxH (default 1280x720)
+python main.py --frame 1280x720    # tracking/game size (default: 480 high, same aspect as the capture)
 ```
+
+A bigger `--frame` gives a sharper picture but costs more tracking time (it scales with the
+pixel count); the capture size mostly affects image quality and what your camera supports. If
+the camera delivers a different aspect ratio than the frame, the centre is cropped instead of
+stretched. Changing the frame size triggers a new calibration. `eval.record` takes the same
+options.
 
 While playing, press `k` to switch to the next camera. Recalibrate (`c`) afterwards.
 

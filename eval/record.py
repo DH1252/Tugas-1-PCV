@@ -10,7 +10,7 @@ import cv2  # noqa: E402
 
 from game import render
 from vision.capture import Source
-from vision.config import load_config
+from vision.config import add_resolution_args, apply_resolution, load_config
 from vision.tracker import calib_box
 
 CALIB = (1.5, 3.0)
@@ -23,6 +23,7 @@ def main():
     ap.add_argument("--still", type=float, nargs=2, default=(6, 11), metavar=("START", "END"))
     ap.add_argument("--no-still", action="store_true")
     ap.add_argument("--out", default="clips")
+    add_resolution_args(ap)
     ap.add_argument("--camera", type=int)
     ap.add_argument("--config")
     args = ap.parse_args()
@@ -30,6 +31,10 @@ def main():
     cfg = load_config(args.config)
     if args.camera is not None:
         cfg["camera"]["index"] = args.camera
+    try:
+        apply_resolution(cfg, args.resolution, args.frame)
+    except ValueError as e:
+        ap.error(str(e))
     src = Source(cfg)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

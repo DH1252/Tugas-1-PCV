@@ -117,3 +117,11 @@ def test_attempt_order(cfg):
     if capture.sys.platform == "win32":
         assert order[:3] == [("msmf", "MJPG"), ("msmf", None), ("dshow", "MJPG")]
     assert order[-1][0] == "auto"
+
+
+def test_fit_aspect_crops_centre():
+    frame = np.zeros((480, 640, 3), np.uint8)
+    assert capture.fit_aspect(frame, (854, 480)).shape[:2] == (360, 640)
+    wide = np.zeros((720, 1280, 3), np.uint8)
+    assert capture.fit_aspect(wide, (640, 480)).shape[:2] == (720, 960)
+    assert capture.fit_aspect(wide, (854, 480)) is wide

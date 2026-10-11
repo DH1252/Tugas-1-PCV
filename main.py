@@ -8,7 +8,7 @@ import cv2  # noqa: E402
 
 from game.engine import Game
 from vision.capture import Source, list_cameras
-from vision.config import load_config
+from vision.config import add_resolution_args, apply_resolution, load_config
 
 WINDOW = "Keep It Up"
 DEBUG_WINDOW = "Debug"
@@ -56,6 +56,7 @@ def main():
     ap.add_argument("--loop", action="store_true", help="loop the replayed clip")
     ap.add_argument("--debug", action="store_true")
     ap.add_argument("--recalibrate", action="store_true", help="ignore the saved calibration")
+    add_resolution_args(ap)
     ap.add_argument("--camera", type=int, help="camera index (see --list-cameras)")
     ap.add_argument("--list-cameras", action="store_true")
     ap.add_argument("--config")
@@ -71,6 +72,10 @@ def main():
         return
     if args.camera is not None:
         cfg["camera"]["index"] = args.camera
+    try:
+        apply_resolution(cfg, args.resolution, args.frame)
+    except ValueError as e:
+        ap.error(str(e))
     cameras = None
     src = Source(cfg, args.video)
     game = Game(cfg, hands=args.hands, baseline=args.tracker == "baseline", debug=args.debug,
