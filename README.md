@@ -19,7 +19,7 @@ python main.py --sim             # no camera: the mouse moves the markers
 
 The game calibrates every time it starts, which takes about 10 seconds:
 
-1. Step out of view with your markers for the 2-second countdown, so it can photograph the empty room.
+1. Hide your markers and keep still for the 2-second countdown, so it can photograph the room without them.
 2. Hold each marker inside the square as it moves to three spots.
 
 Then hold a marker in the START circle (or press Space). Swing fast through orbs of your marker's color. A bomb or an orb that falls past you costs a life, and you have three.
