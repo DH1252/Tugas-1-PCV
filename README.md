@@ -39,9 +39,9 @@ Then hold a marker in the START circle (or press Space). Swing fast through orbs
 Each camera frame goes through these steps in `tracking.py`:
 
 1. Mirror the frame and shrink it to 320×240.
-2. Correct for light changes by comparing the walls with the picture of the empty room.
+2. Correct for light changes by comparing the walls with the background picture from calibration.
 3. Convert to HSV and keep the pixels inside the marker's learned hue, saturation and brightness range.
-4. Ignore places that already had the marker's color in the empty room.
+4. Ignore places that already had the marker's color in that background picture (a blue shirt, a green poster).
 5. Remove specks and fill holes with morphological opening and closing.
 6. Find the blobs and take the center of each blob's thickest part (the palm of a glove).
 7. Follow the marker with a Kalman filter, which also predicts its position through a few missed frames.
