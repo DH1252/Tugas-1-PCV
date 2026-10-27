@@ -71,8 +71,9 @@ class SimCamera:
         img = np.clip(img + noise, 0, 255).astype(np.uint8)
         for color, (u, v) in self.balls():
             # screen position -> px in the un-mirrored 640x480 image
-            x = 639 - 2 * (tracking.AREA_X + u * tracking.AREA_W)
-            y = 2 * (tracking.AREA_Y + v * tracking.AREA_H)
+            s = 640 / tracking.W
+            x = 639 - s * (tracking.AREA_X + u * tracking.AREA_W)
+            y = s * (tracking.AREA_Y + v * tracking.AREA_H)
             cv2.circle(img, (int(x), int(y)), 14, color, -1)
         return img, now
 
@@ -244,13 +245,14 @@ class Demo:
                 pygame.draw.circle(self.screen, YELLOW, proc_to_px(*tracker.pred), radius, 2)
         for i, line in enumerate(lines):
             self.text(line, (20, 110 + 30 * i), 30, left=True)
-        # Half-size masks; the rectangle is the play area.
+        # 160x120 masks; the rectangle is the play area.
+        s = 160 / tracking.W
         for i, (key, mask) in enumerate(v.masks.items()):
             x0, y0 = 20 + 170 * i, H - 140
             thumb = cv2.cvtColor(cv2.resize(mask, (160, 120), interpolation=cv2.INTER_NEAREST), cv2.COLOR_GRAY2RGB)
             self.screen.blit(pygame.image.frombuffer(thumb.tobytes(), (160, 120), "RGB"), (x0, y0))
-            area = pygame.Rect(x0 + tracking.AREA_X / 2, y0 + tracking.AREA_Y / 2,
-                               tracking.AREA_W / 2, tracking.AREA_H / 2)
+            area = pygame.Rect(x0 + tracking.AREA_X * s, y0 + tracking.AREA_Y * s,
+                               tracking.AREA_W * s, tracking.AREA_H * s)
             pygame.draw.rect(self.screen, v.models[key].rgb, area, 1)
             self.text(key, (x0 + 10, y0 + 12), 26, v.models[key].rgb)
 
@@ -357,6 +359,8 @@ def main():
     p.add_argument("--backend", choices=["auto", "msmf", "dshow"], default="auto",
                    help="camera backend (Windows): auto tries Media Foundation, then DirectShow")
     p.add_argument("--size", default="640x480", metavar="WxH", help="capture resolution, e.g. 1280x720")
+    p.add_argument("--track-size", default="320x240", metavar="WxH",
+                   help="color tracking resolution, 4:3 (default 320x240); higher is finer but slower")
     p.add_argument("--margin", type=float, default=0.1,
                    help="camera border left out of the play area, 0-0.4 (default 0.1)")
     p.add_argument("--opencl", action="store_true", help="run the color masks on the GPU (OpenCL)")
@@ -366,6 +370,10 @@ def main():
     args = p.parse_args()
     width, height = args.size.lower().split("x")
     size = (int(width), int(height))
+    width, height = args.track_size.lower().split("x")
+    if int(width) * 3 != int(height) * 4:
+        p.error("--track-size must be 4:3, e.g. 240x180, 320x240 or 640x480")
+    tracking.set_size(int(width), int(height))
     tracking.set_margin(min(max(args.margin, 0.0), 0.4))
     if args.opencl:
         device = tracking.enable_opencl()

@@ -1,7 +1,7 @@
 """Color tracking: calibration, light correction, color masks, blobs and a Kalman tracker.
 
 Per frame (Vision.__call__):
-  1. prepare()        mirror, cut to 4:3, shrink to 320x240, blur
+  1. prepare()        mirror, cut to 4:3, shrink to the processing size (320x240 by default), blur
   2. LightCorrection  scale each channel so the walls match the calibration picture
   3. HSV + inRange    marker hue, saturation and brightness -> mask (0 or 255)
   4. exclusion        drop places that had the marker's color in the empty room
@@ -11,6 +11,7 @@ Per frame (Vision.__call__):
 
 OpenCV HSV: H is 0..179 (degrees / 2) and wraps (red is near 0 and 179); S, V are 0..255.
 OpenCV images are BGR.
+Pixel numbers in this file are tuned for 320x240; px() scales them to the processing size.
 """
 import math
 from collections import namedtuple
@@ -18,11 +19,12 @@ from collections import namedtuple
 import cv2
 import numpy as np
 
-W, H = 320, 240                                  # processing size
+W, H = 320, 240                                  # processing size, 4:3 (see set_size)
 KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
 MIN_AREA = 40                                    # px; smaller blobs are noise
 MAX_AREA = 0.6 * W * H                           # a close glove is big
 USE_OPENCL = False                               # set by enable_opencl()
+MARGIN = 0.1                                     # set by set_margin()
 
 # Play area in processing px: the 16:9 crop minus a margin (see set_margin).
 AREA_X, AREA_Y, AREA_W, AREA_H = 32.0, 48.0, 256.0, 144.0
@@ -31,10 +33,31 @@ AREA_X, AREA_Y, AREA_W, AREA_H = 32.0, 48.0, 256.0, 144.0
 Saber = namedtuple("Saber", "status pos vel t")
 
 
+def px(n):
+    """n px at 320x240 -> px at the processing size."""
+    return n * W / 320
+
+
+def odd(n):
+    """Nearest odd kernel size, at least 1."""
+    return max(1, round(n) // 2 * 2 + 1)
+
+
+def set_size(width, height):
+    """Processing size (4:3, e.g. 640x480): rescales the pixel constants and the play area."""
+    global W, H, KERNEL, MIN_AREA, MAX_AREA
+    W, H = width, height
+    KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (odd(px(7)),) * 2)
+    MIN_AREA = 40 * px(1) ** 2
+    MAX_AREA = 0.6 * W * H
+    set_margin(MARGIN)
+
+
 def set_margin(margin):
     """margin: fraction of the 16:9 crop left out on each side (0.1 = 10%)."""
-    global AREA_X, AREA_Y, AREA_W, AREA_H
-    crop_h = W * 9 / 16                          # 180
+    global MARGIN, AREA_X, AREA_Y, AREA_W, AREA_H
+    MARGIN = margin
+    crop_h = W * 9 / 16                          # 180 at 320x240
     AREA_X = margin * W
     AREA_Y = (H - crop_h) / 2 + margin * crop_h
     AREA_W = W * (1 - 2 * margin)
@@ -59,7 +82,7 @@ def prepare(frame):
         frame = frame[(fh - ch) // 2:(fh + ch) // 2, (fw - cw) // 2:(fw + cw) // 2]
     mirrored = cv2.flip(frame, 1)                # horizontal flip, like a mirror
     small = cv2.resize(mirrored, (W, H), interpolation=cv2.INTER_AREA)
-    return mirrored, cv2.GaussianBlur(small, (5, 5), 0)
+    return mirrored, cv2.GaussianBlur(small, (odd(px(5)),) * 2, 0)
 
 
 def to_screen(x, y):
@@ -87,10 +110,12 @@ class LightCorrection:
 
     def __init__(self, background):
         walls = np.zeros((H, W), bool)
-        walls[:36, :] = True                     # top strip
-        walls[:, :32] = True                     # left strip
-        walls[:, -32:] = True                    # right strip
-        self.idx = np.flatnonzero(walls)[::8]    # every 8th wall pixel
+        top, side = round(px(36)), round(px(32))
+        walls[:top, :] = True                    # top strip
+        walls[:, :side] = True                   # left strip
+        walls[:, -side:] = True                  # right strip
+        step = max(1, round(8 * px(1) ** 2))     # every 8th wall pixel at 320x240
+        self.idx = np.flatnonzero(walls)[::step]
         self.reference = background.reshape(-1, 3)[self.idx].astype(np.float32)
         self.gains = np.ones(3, np.float32)
 
@@ -153,14 +178,15 @@ def marker_pixels(box, background):
     new = np.abs(box.astype(np.int16) - background.astype(np.int16)).max(axis=2) > 30
     skin = ((h <= 25) | (h >= 170)) & (s < 150)
     candidates = new & ~skin & (v >= 50) & (s >= 60)
-    if candidates.sum() < 25:
+    least = 25 * px(1) ** 2
+    if candidates.sum() < least:
         return None
     # Marker hue = most common hue among the most saturated candidates.
     strong = candidates & (s >= max(70, np.percentile(s[candidates], 97) - 50))
     counts = np.bincount(h[strong], minlength=180)
     peak = int(np.argmax(counts))
     marker = candidates & (np.abs(hue_offset(h, peak)) <= 15)
-    if marker.sum() < 25:
+    if marker.sum() < least:
         return None
     return hsv[marker]
 
@@ -170,7 +196,7 @@ class Calibrator:
     then a ColorModel and exclusion mask per marker."""
 
     SPOTS = [(0.5, 0.5), (0.25, 0.4), (0.75, 0.72)]     # square centers, screen coords
-    BOX = 36                                            # square size, processing px
+    BOX = 36                                            # square size, px at 320x240
 
     def __init__(self, markers=("A", "B")):
         self.markers = list(markers)
@@ -201,9 +227,10 @@ class Calibrator:
         if self.background is None or self.done:
             return None
         u, v = self.SPOTS[self.spot_i]
-        x = AREA_X + u * AREA_W - self.BOX / 2
-        y = AREA_Y + v * AREA_H - self.BOX / 2
-        return int(x), int(y), self.BOX, self.BOX
+        size = round(px(self.BOX))
+        x = AREA_X + u * AREA_W - size / 2
+        y = AREA_Y + v * AREA_H - size / 2
+        return int(x), int(y), size, size
 
     def feed(self, small, t):
         if self.done:
@@ -251,7 +278,7 @@ class Calibrator:
 
     def _finish(self):
         hsv = cv2.cvtColor(self.background, cv2.COLOR_BGR2HSV)
-        grow = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        grow = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (odd(px(7)),) * 2)
         for key, model in self.models.items():
             taken = cv2.dilate(clean(model.mask(hsv)), grow)
             self.keep[key] = cv2.bitwise_not(taken)        # 255 = allowed, 0 = excluded
@@ -291,7 +318,7 @@ class Tracker:
     def __init__(self):
         self.kf = cv2.KalmanFilter(4, 2)
         self.kf.measurementMatrix = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], np.float32)
-        self.kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 0.5   # low: trust the camera
+        self.kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 0.5 * px(1) ** 2   # low: trust the camera
         self.status = "searching"
         self.seen = []                            # (t, x, y) while searching
         self.missed = 0
@@ -317,7 +344,7 @@ class Tracker:
             self.seen = []
             return
         x, y, area = max(blobs, key=lambda b: b[2])
-        if self.seen and math.dist((x, y), self.seen[-1][1:]) > 20:
+        if self.seen and math.dist((x, y), self.seen[-1][1:]) > px(20):
             self.seen = []                                   # jumped: restart the count
         self.seen.append((t, x, y))
         if len(self.seen) < 3:
@@ -325,7 +352,7 @@ class Tracker:
         t0, x0, y0 = self.seen[0]
         span = max(t - t0, 1e-3)
         self.kf.statePost = np.array([[x], [y], [(x - x0) / span], [(y - y0) / span]], np.float32)
-        self.kf.errorCovPost = np.diag([4.0, 4.0, 9e4, 9e4]).astype(np.float32)
+        self.kf.errorCovPost = np.diag([4.0, 4.0, 9e4, 9e4]).astype(np.float32) * px(1) ** 2
         self.status, self.missed, self.seen = "tracking", 0, []
         self.radius = math.sqrt(area / math.pi)
 
@@ -336,10 +363,10 @@ class Tracker:
                                             np.float32)
         a, b, c = dt ** 4 / 4, dt ** 3 / 2, dt ** 2
         self.kf.processNoiseCov = np.array([[a, 0, b, 0], [0, a, 0, b], [b, 0, c, 0], [0, b, 0, c]],
-                                           np.float32) * 2000.0 ** 2
+                                           np.float32) * px(2000.0) ** 2
         x, y, vx, vy = self.kf.predict().ravel()
         # Gate: 3 radii (min 30 px) plus the distance moved per frame while coasting.
-        gate = max(3 * self.radius, 30) + math.hypot(vx, vy) * dt * (self.missed + 1)
+        gate = max(3 * self.radius, px(30)) + math.hypot(vx, vy) * dt * (self.missed + 1)
         self.pred, self.gate = (x, y), gate
         best = min(blobs, key=lambda b: math.dist(b[:2], (x, y)), default=None)
         if best is not None and math.dist(best[:2], (x, y)) <= gate:
